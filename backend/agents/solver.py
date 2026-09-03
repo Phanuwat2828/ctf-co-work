@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent, RunContext
@@ -53,6 +55,12 @@ from backend.tools.vision import view_image
 from backend.tracing import SolverTracer
 
 logger = logging.getLogger(__name__)
+
+
+def skills_mounted() -> bool:
+    """True when the on-demand skill library is mounted into this sandbox."""
+    d = os.environ.get("CTF_SKILLS_DIR", "")
+    return bool(d) and Path(d, "INDEX.txt").is_file()
 
 
 @dataclass
@@ -214,8 +222,19 @@ class Solver:
 
         try:
             from pydantic_ai.usage import UsageLimits
+            if not self._messages:
+                first_prompt = (
+                    "Solve this CTF challenge.\n\n"
+                    "Your FIRST action must be the Skill Library step from the system prompt: "
+                    "grep /challenge/skills/INDEX.txt for your challenge category, cat the top "
+                    "1-2 matching skills, then solve using them. Do not start broad exploration first."
+                    if skills_mounted()
+                    else "Solve this CTF challenge."
+                )
+            else:
+                first_prompt = "Continue solving."
             result = await self._agent.run(
-                "Solve this CTF challenge." if not self._messages else "Continue solving.",
+                first_prompt,
                 deps=self.deps,
                 message_history=self._messages if self._messages else None,
                 usage_limits=UsageLimits(request_limit=None),

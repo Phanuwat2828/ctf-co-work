@@ -107,6 +107,8 @@ def skill_library_lines(meta: ChallengeMeta | None = None) -> list[str]:
             "  then `cat` the top 1-2 matching files (e.g. `cat /challenge/skills/hunt-xxe.md`) "
             "and apply their guidance as your FIRST analysis steps — before broad generic "
             "exploration.",
+            "- Reading a matching skill is MANDATORY before broad work: if the grep returns "
+            "anything, `cat` and follow at least one of them first. Only skip when nothing matches.",
             "- Only broaden the keywords if nothing matches. Read only what you need — never "
             "dump the whole library into context.",
         ]
