@@ -1,0 +1,46 @@
+services:
+  kali:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # ctf = แนะนำสำหรับแข่ง
+        # everything = ลง Kali ทุก tool
+        TOOLSET: ctf
+
+    image: kali-ctf:latest
+    container_name: kali-ctf
+    hostname: kali-ctf
+
+    stdin_open: true
+    tty: true
+
+    working_dir: /work
+
+    # สำหรับ nmap/raw sockets/VPN/debugging
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_PTRACE
+
+    # ทำให้ GDB / ptrace ใช้งานสะดวก
+    security_opt:
+      - seccomp:unconfined
+
+    # OpenVPN / WireGuard / HTB VPN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    volumes:
+      # ไฟล์โจทย์ CTF
+      - ./work:/work
+
+      # flag / output / dump
+      - ./loot:/loot
+
+    environment:
+      TERM: xterm-256color
+
+    command: ["sleep", "infinity"]
+
+    restart: unless-stopped
