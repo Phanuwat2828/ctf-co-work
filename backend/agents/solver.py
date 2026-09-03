@@ -63,6 +63,28 @@ def skills_mounted() -> bool:
     return bool(d) and Path(d, "INDEX.txt").is_file()
 
 
+SKILLS_PATH_MARKER = "/challenge/skills/"
+
+SKILL_REMINDER = (
+    "\n\n[system reminder] You have not read from the Skill Library yet "
+    f"({SKILLS_PATH_MARKER}). Run `grep -i -E '<category keywords>' "
+    f"{SKILLS_PATH_MARKER}INDEX.txt`, then `cat` a matching skill and follow it "
+    "before continuing broad exploration."
+)
+
+
+def tool_accesses_skills(tool_args: Any) -> bool:
+    """True when a tool call touches the mounted skill library."""
+    try:
+        if isinstance(tool_args, str):
+            text = tool_args
+        else:
+            text = " ".join(str(v) for v in tool_args.values())
+    except Exception:
+        text = str(tool_args)
+    return SKILLS_PATH_MARKER in text
+
+
 @dataclass
 class TracingToolset(WrapperToolset[SolverDeps]):
     """Wraps a toolset to add per-call tracing and loop detection."""
@@ -70,6 +92,10 @@ class TracingToolset(WrapperToolset[SolverDeps]):
     tracer: SolverTracer = field(repr=False)
     loop_detector: LoopDetector = field(repr=False)
     step_counter: list[int] = field(repr=False)
+    skills_available: bool = False
+
+    def __post_init__(self) -> None:
+        self._skills_seen = False
 
     async def call_tool(
         self, name: str, tool_args: dict[str, Any], ctx: RunContext[SolverDeps], tool: ToolsetTool[SolverDeps]
@@ -91,6 +117,15 @@ class TracingToolset(WrapperToolset[SolverDeps]):
 
         result_str = str(result) if result is not None else ""
         self.tracer.tool_result(name, result_str, step)
+
+        # Skill library usage: record it and nudge if the model ignores it.
+        if self.skills_available:
+            if tool_accesses_skills(tool_args) and not getattr(self, "_skills_seen", False):
+                self._skills_seen = True
+                self.tracer.event("skill_read", tool=name, step=step)
+            if not getattr(self, "_skills_seen", False) and step >= 3 and isinstance(result, str):
+                result = f"{result}\n\n{SKILL_REMINDER}"
+                self.tracer.event("skill_reminder_injected", step=step)
 
         # Inject loop warning alongside result on "warn" level
         if loop_status == "warn":
@@ -198,6 +233,7 @@ class Solver:
             tracer=self.tracer,
             loop_detector=self.loop_detector,
             step_counter=self._step_count,
+            skills_available=skills_mounted(),
         )
 
         self._agent = Agent(
