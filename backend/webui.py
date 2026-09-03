@@ -628,6 +628,7 @@ async def _status(request: web.Request) -> web.Response:
         "persist": sorted(getattr(deps, "persistent_challenges", set())),
         "attempts": dict(getattr(deps, "attempts", {})),
         "max_attempts": getattr(deps.settings, "max_attempts_per_challenge", 3),
+        "manual": sorted(getattr(deps, "manual_challenges", {})),
     })
 
 
@@ -857,6 +858,15 @@ async def _add_manual_challenge(request: web.Request) -> web.Response:
     logger.info("Manual challenge added: %s (%d file(s))", name, saved)
     suffix = f" with {saved} file(s) attached" if saved else ""
     return _json({"ok": True, "message": f"Challenge '{name}' added{suffix} — Spawn swarm to solve (flag reported directly, no CTFd submit)."})
+
+
+async def _delete_manual_challenge(request: web.Request) -> web.Response:
+    """Delete a hand-added challenge (stops swarm, clears state, removes folder)."""
+    deps = request.app["deps"]
+    name = request.match_info["name"]
+    from backend.agents.coordinator_core import do_delete_manual
+    message = await do_delete_manual(deps, name)
+    return _json({"ok": True, "message": message})
 
 
 async def _toggle_autospawn(request: web.Request) -> web.Response:
@@ -1113,6 +1123,7 @@ def build_app(deps: Any, poller: Any) -> web.Application:
     app.router.add_post("/api/autospawn", _toggle_autospawn)
     app.router.add_post("/api/challenges/{name}/spawn", _spawn)
     app.router.add_post("/api/challenges/manual", _add_manual_challenge)
+    app.router.add_delete("/api/challenges/{name}", _delete_manual_challenge)
     app.router.add_post("/api/challenges/{name}/persist", _set_persist)
     app.router.add_post("/api/challenges/{name}/wrong-flag", _flag_wrong)
     app.router.add_post("/api/swarms/{name}/kill", _kill)

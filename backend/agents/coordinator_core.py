@@ -197,6 +197,43 @@ async def do_kill_swarm(deps: CoordinatorDeps, challenge_name: str) -> str:
     return f"Swarm for {challenge_name} cancelled"
 
 
+async def do_delete_manual(deps: CoordinatorDeps, challenge_name: str) -> str:
+    """Delete a challenge that was added by hand (not from CTFd): stops any
+    running swarm, clears its state, and removes the challenge folder on disk."""
+    import shutil
+
+    ch_dir = deps.manual_challenges.get(challenge_name)
+    if ch_dir is None:
+        return f"'{challenge_name}' is not a manually-added challenge — cannot delete."
+
+    # Stop + clean any running swarm / auto-retry state.
+    swarm = deps.swarms.pop(challenge_name, None)
+    if swarm is not None:
+        try:
+            await swarm.force_stop()
+        except Exception:
+            pass
+    task = deps.swarm_tasks.pop(challenge_name, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+    deps.manual_challenges.pop(challenge_name, None)
+    deps.challenge_dirs.pop(challenge_name, None)
+    deps.challenge_metas.pop(challenge_name, None)
+    deps.results.pop(challenge_name, None)
+    deps.persistent_challenges.discard(challenge_name)
+    deps.attempts.pop(challenge_name, None)
+    deps.attempt_notes.pop(challenge_name, None)
+    deps.bad_flags.pop(challenge_name, None)
+
+    path = Path(ch_dir) if ch_dir else None
+    if path is not None and path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+    logger.info("Manual challenge deleted: %s", challenge_name)
+    return f"Challenge '{challenge_name}' deleted."
+
+
 def should_retry(deps: CoordinatorDeps, challenge: str, solved_names: set[str], cap: int) -> bool:
     """Whether the coordinator should auto-start another attempt for a challenge
     whose swarm finished without a flag. cap <= 0 means unlimited attempts."""

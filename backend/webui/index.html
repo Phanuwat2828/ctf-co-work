@@ -439,6 +439,10 @@ function render(s) {
                             : '<span class="badge b-unsolved">unsolved</span>');
     const dname = esc(name);
     const reportedFlag = ((s.results && s.results[name] && s.results[name].flag) || (swarm && swarm.winner) || '');
+    const isManual = (s.manual || []).indexOf(name) >= 0;
+    const delBtn = isManual
+      ? '<button class="btn danger" data-act="delch" data-name="' + dname + '" title="Delete this manually-added challenge (folder too)">🗑</button>'
+      : '';
 
     let actions = '';
     if (running) {
@@ -455,7 +459,8 @@ function render(s) {
         persBtn +
         '<button class="btn warn" data-act="broadcast" data-name="' + dname + '">Broadcast</button>' +
         '<button class="btn" data-act="bump" data-name="' + dname + '">Bump</button>' +
-        '<button class="btn danger" data-act="kill" data-name="' + dname + '">Kill</button></div>';
+        '<button class="btn danger" data-act="kill" data-name="' + dname + '">Kill</button>' +
+        delBtn + '</div>';
     } else if (!solved) {
       const persOn = ((s.persist || []).indexOf(name) >= 0);
       const att = (s.attempts || {})[name] || 0;
@@ -463,13 +468,14 @@ function render(s) {
         '<button class="btn primary" data-act="spawn" data-name="' + dname + '">Spawn swarm</button>' +
         '<button class="btn ' + (persOn ? 'primary' : '') + '" data-act="persist" data-name="' + dname +
           '" title="Keep spawning attempts until the flag is found">' + (persOn ? '⏳ flag ON (' + att + ')' : '⏳ flag') + '</button>' +
-        '<button class="btn" data-act="log" data-name="' + dname + '">Log</button></div>';
+        '<button class="btn" data-act="log" data-name="' + dname + '">Log</button>' +
+        delBtn + '</div>';
     } else {
       // Solved rows: offer "flag ผิด" when a flag was reported (manual/no-CTFd
       // challenges are judged by the operator, so a wrong guess must be retried).
       actions = '<div class="rowbtns"><button class="btn" data-act="log" data-name="' + dname + '">Log</button>' +
         (reportedFlag ? '<button class="btn warn" data-act="wrongflag" data-name="' + dname + '" title="Mark this flag as WRONG — stop, then retry reading the previous log">❌ flag ผิด</button>' : '') +
-        '</div>';
+        delBtn + '</div>';
     }
 
     // Show the confirmed flag under the challenge name so a solved flag is always visible.
@@ -504,6 +510,7 @@ document.getElementById('ch-body').addEventListener('click', (e) => {
   else if (act === 'trace') viewTrace(name, btn.dataset.model || '');
   else if (act === 'persist') togglePersist(name);
   else if (act === 'wrongflag') wrongFlag(name);
+  else if (act === 'delch') deleteManualChallenge(name);
   else if (act === 'copyflag') copyFlag(btn.dataset.flag || '');
   else if (act === 'log') challengeLogs(name);
 });
@@ -731,6 +738,18 @@ async function wrongFlag(name) {
     refresh();
   } catch (e) {
     toast('wrong-flag failed: ' + e);
+  }
+}
+
+async function deleteManualChallenge(name) {
+  if (!name) return;
+  if (!confirm('Delete manual challenge "' + name + '"? This stops any running swarm and removes its folder.')) return;
+  try {
+    const r = await api('/api/challenges/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast(r.message || 'deleted');
+    refresh();
+  } catch (e) {
+    toast('delete failed: ' + e);
   }
 }
 
