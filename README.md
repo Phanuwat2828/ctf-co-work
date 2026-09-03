@@ -1,163 +1,98 @@
-# CTF Agent
+# CTF Agent (ctf-co-work)
 
-Autonomous CTF (Capture The Flag) solver that races multiple AI models against challenges in parallel. Built in a weekend, we used it to solve all 52/52 challenges and win **1st place at BSidesSF 2026 CTF**.
+A self-hosted CTF solving agent. A **coordinator** watches a CTFd platform and
+spawns **swarms** of AI solvers against each challenge — every solver runs in its
+own isolated Docker sandbox and races to be the first to submit a correct flag.
 
-Built by [Veria Labs](https://verialabs.com), founded by members of [.;,;.](https://ctftime.org/team/222911) (smiley), the [#1 US CTF team on CTFTime in 2024 and 2025](https://ctftime.org/stats/2024/US). We build AI agents that find and exploit real security vulnerabilities for large enterprises.
+## Highlights
 
-## Results
+- **Multi-model swarm** — several models attack one challenge at once; first to
+  confirm the flag wins, the rest are stopped.
+- **Coordinator LLM** — reads solver traces and can guide strategy, spawn swarms,
+  broadcast hints, and keep retrying until a flag is found.
+- **Role-split swarms** — an optional planner LLM divides agents by attack
+  strategy (recon, exploit, crypto…), with configurable agent count; models may
+  be reused across roles.
+- **On-demand skill library** — hundreds of technique playbooks are mounted into
+  each sandbox (`/challenge/skills`); the solver greps an index and reads only
+  the skills it needs. Category-matched short playbooks are also injected
+  automatically from `skills/`.
+- **Web dashboard** — live status per challenge/swarm, trace viewer, chat with
+  the coordinator, spawn/kill/broadcast/bump controls, "keep trying until flag",
+  provider testing, and a **wrong-flag → retry reading previous logs** flow.
+- **Flag safety** — confirmed flags are written to `logs/flags.jsonl` and shown
+  on the dashboard (with one-click copy), so a solved challenge is never lost.
+- **Optional hardening** — dashboard bearer token and a total spend cap.
 
-| Competition | Challenges Solved | Result |
-|-------------|:-:|--------|
-| **BSidesSF 2026** | 52/52 (100%) | **1st place ($1,500)** |
-
-The agent solves challenges across all categories — pwn, rev, crypto, forensics, web, and misc.
-
-## How It Works
-
-A **coordinator** LLM manages the competition while **solver swarms** attack individual challenges. Each swarm runs multiple models simultaneously — the first to find the flag wins.
+## How it runs
 
 ```
-                        +-----------------+
-                        |  CTFd Platform  |
-                        +--------+--------+
-                                 |
-                        +--------v--------+
-                        |  Poller (5s)    |
-                        +--------+--------+
-                                 |
-                        +--------v--------+
-                        | Coordinator LLM |
-                        | (Claude/Codex)  |
-                        +--------+--------+
-                                 |
-              +------------------+------------------+
-              |                  |                  |
-     +--------v--------+ +------v---------+ +------v---------+
-     | Swarm:          | | Swarm:         | | Swarm:         |
-     | challenge-1     | | challenge-2    | | challenge-N    |
-     |                 | |                | |                |
-     |  Opus (med)     | |  Opus (med)    | |                |
-     |  Opus (max)     | |  Opus (max)    | |     ...        |
-     |  GPT-5.4        | |  GPT-5.4       | |                |
-     |  GPT-5.4-mini   | |  GPT-5.4-mini  | |                |
-     |  GPT-5.3-codex  | |  GPT-5.3-codex | |                |
-     +--------+--------+ +--------+-------+ +----------------+
-              |                    |
-     +--------v--------+  +-------v--------+
-     | Docker Sandbox  |  | Docker Sandbox |
-     | (isolated)      |  | (isolated)     |
-     |                 |  |                |
-     | pwntools, r2,   |  | pwntools, r2,  |
-     | gdb, python...  |  | gdb, python... |
-     +-----------------+  +----------------+
+CTFd platform
+   │  (polls every ~5s)
+Coordinator (LLM) + web dashboard (http://127.0.0.1:9400)
+   │
+   ├── swarm per challenge (several solvers, each in its own Docker sandbox)
+   └── flag confirmed → logged + shown on dashboard
 ```
 
-Each solver runs in an isolated Docker container with CTF tools pre-installed. Solvers never give up — they keep trying different approaches until the flag is found.
-
-## Quick Start
+## Quick start
 
 ```bash
-# Install
+# 1. Install deps (Python 3.14+ with uv)
 uv sync
 
-# Build sandbox image
+# 2. Build the solver sandbox image (Kali-based, pre-loaded with CTF tools)
 docker build -f sandbox/Dockerfile.sandbox -t ctf-sandbox .
 
-# Configure credentials
-cp .env.example .env
-# Edit .env with your API keys and CTFd token
+# 3. Configure credentials
+cp .env.example .env     # add CTFd URL/token + model API keys
 
-# Run against a CTFd instance
-uv run ctf-solve \
-  --ctfd-url https://ctf.example.com \
-  --ctfd-token ctfd_your_token \
-  --challenges-dir challenges \
-  --max-challenges 10 \
-  -v
+# 4. Run (coordinator + web dashboard)
+./run.sh                 # dashboard at http://127.0.0.1:9400
 ```
 
-## Web Dashboard
-
-While the coordinator runs, a web dashboard is available at `http://127.0.0.1:9400` (change with `--web-port`, `0` = auto-pick):
-
-- **Live status** — every challenge (solved/unsolved), each swarm and per-agent findings/status, flags found, and total cost/tokens
-- **Setup on the web** — no need to pre-edit `.env`: start with empty config, open the dashboard, use the **⚙ Setup** panel to add CTFd URL/token and API keys. The app reconfigures the live connection; new solvers pick up keys immediately.
-- **Chat with the coordinator** — type commands like *"spawn a swarm on 'web-1'"* or *"focus on crypto"*; the coordinator LLM acts on them
-- **Direct controls** per challenge — Spawn swarm, Kill, Broadcast hints, Bump a specific model, and view a solver's trace
-- The `ctf-msg` CLI still works against the same port: `uv run ctf-msg "hint: try XOR" --port 9400`
-
-## Coordinator Backends
+Optional add-ons:
 
 ```bash
-# Claude SDK coordinator (default)
-uv run ctf-solve --coordinator claude ...
+# Interactive Kali box (separate image kali-ctf) for manual work
+cd sandbox-kali && docker compose up -d --build
 
-# Codex coordinator (GPT-5.4 via JSON-RPC)
-uv run ctf-solve --coordinator codex ...
+# Import the on-demand CTF skill library (from a local skill collection)
+uv run python import_skills.py
 ```
 
-## Solver Models
+## Dashboard
 
-Default model lineup (configurable in `backend/models.py`):
+- Top bar: auto-spawn toggle, logs, providers, settings.
+- Challenge table: status, flag (copy), trace, spawn, keep-trying toggle,
+  broadcast/bump/kill, and "❌ flag ผิด" to mark a reported flag wrong and retry.
+- Spawn modal: pick models, or enable **“Let AI split roles”** (agent count +
+  optional planner instruction).
+- Providers panel: manage API providers (OpenAI/Anthropic/Google/custom) and
+  test each one with a real chat message.
 
-| Model | Provider | Notes |
-|-------|----------|-------|
-| Claude Opus 4.6 (medium) | Claude SDK | Balanced speed/quality |
-| Claude Opus 4.6 (max) | Claude SDK | Deep reasoning |
-| GPT-5.4 | Codex | Best overall solver |
-| GPT-5.4-mini | Codex | Fast, good for easy challenges |
-| GPT-5.3-codex | Codex | Reasoning model (xhigh effort) |
+More (including troubleshooting) in [RUN_GUIDE.md](RUN_GUIDE.md).
 
-## Sandbox Tooling
+## Model backends
 
-Each solver gets an isolated Docker container pre-loaded with CTF tools:
+Solvers can run through:
 
-| Category | Tools |
-|----------|-------|
-| **Binary** | radare2, GDB, objdump, binwalk, strings, readelf |
-| **Pwn** | pwntools, ROPgadget, angr, unicorn, capstone |
-| **Crypto** | SageMath, RsaCtfTool, z3, gmpy2, pycryptodome, cado-nfs |
-| **Forensics** | volatility3, Sleuthkit (mmls/fls/icat), foremost, exiftool |
-| **Stego** | steghide, stegseek, zsteg, ImageMagick, tesseract OCR |
-| **Web** | curl, nmap, Python requests, flask |
-| **Misc** | ffmpeg, sox, Pillow, numpy, scipy, PyTorch, podman |
+- **Claude SDK** (`claude-sdk/…`) — subscription-first
+- **Codex CLI** (`codex/…`) — subscription-first
+- **API models** — Bedrock, Azure OpenAI, Zen, Google, and custom
+  OpenAI-compatible / Anthropic-proxy providers (`providers.json`)
 
-## Features
-
-- **Multi-model racing** — multiple AI models attack each challenge simultaneously
-- **Auto-spawn** — new challenges detected and attacked automatically
-- **Coordinator LLM** — reads solver traces, crafts targeted technical guidance
-- **Cross-solver insights** — findings shared between models via message bus
-- **Web dashboard** — live status of all challenges/agents, chat + direct swarm controls
-- **Docker sandboxes** — isolated containers with full CTF tooling
-- **Operator messaging** — send hints to running solvers mid-competition
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your keys:
+## Tests
 
 ```bash
-cp .env.example .env
+uv run pytest tests/ -q
 ```
-
-```env
-CTFD_URL=https://ctf.example.com
-CTFD_TOKEN=ctfd_your_token
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=...
-```
-
-All settings can also be passed as environment variables or CLI flags.
-
-## Requirements
-
-- Python 3.14+
-- Docker
-- API keys for at least one provider (Anthropic, OpenAI, Google)
-- `codex` CLI (for Codex solver/coordinator)
-- `claude` CLI (bundled with claude-agent-sdk)
 
 ## Acknowledgements
 
-- [es3n1n/Eruditus](https://github.com/es3n1n/Eruditus) — CTFd interaction and HTML helpers in `pull_challenges.py`
+- [es3n1n/Eruditus](https://github.com/es3n1n/Eruditus) — CTFd interaction and
+  HTML helpers in `pull_challenges.py`.
+
+## License
+
+[MIT](LICENSE)
