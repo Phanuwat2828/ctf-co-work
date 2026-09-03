@@ -46,6 +46,7 @@ class CoordinatorDeps:
     max_concurrent_challenges: int = 10
 
     msg_port: int = 0  # 0 = auto-pick free port
+    auto_spawn: bool = False  # spawn swarms automatically? (off = manual via web)
 
     # Runtime state
     coordinator_inbox: asyncio.Queue = field(default_factory=asyncio.Queue)
@@ -55,3 +56,12 @@ class CoordinatorDeps:
     results: dict[str, dict] = field(default_factory=dict)
     challenge_dirs: dict[str, str] = field(default_factory=dict)
     challenge_metas: dict[str, Any] = field(default_factory=dict)
+    # Manually added challenges (no CTFd) — name -> challenge dir
+    manual_challenges: dict[str, str] = field(default_factory=dict)
+
+    # "Keep trying until flag" state (auto-retry at coordinator level).
+    persistent_challenges: set[str] = field(default_factory=set)
+    attempts: dict[str, int] = field(default_factory=dict)  # challenge -> completed attempt count
+    attempt_notes: dict[str, list[str]] = field(default_factory=dict)  # short summaries per attempt
+    # Flags the operator has marked WRONG for a challenge (manual/no-CTFd flows).
+    bad_flags: dict[str, list[str]] = field(default_factory=dict)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -13,9 +12,9 @@ from backend.config import Settings
 from backend.cost_tracker import CostTracker
 from backend.ctfd import CTFdClient
 from backend.deps import CoordinatorDeps
-from backend.models import DEFAULT_MODELS
 from backend.poller import CTFdPoller
 from backend.prompts import ChallengeMeta
+from backend.webui import start_web_server
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,11 @@ def build_deps(
         token=settings.ctfd_token,
         username=settings.ctfd_user,
         password=settings.ctfd_pass,
+        session_cookie=getattr(settings, "ctfd_session_cookie", ""),
     )
     cost_tracker = CostTracker()
-    specs = model_specs or list(DEFAULT_MODELS)
+    from backend.providers import model_specs_from_providers
+    specs = model_specs or model_specs_from_providers()
     Path(challenges_root).mkdir(parents=True, exist_ok=True)
 
     deps = CoordinatorDeps(
@@ -85,8 +86,9 @@ async def run_event_loop(
     poller = CTFdPoller(ctfd=ctfd, interval_s=5.0)
     await poller.start()
 
-    # Start operator message HTTP endpoint
-    msg_server = await _start_msg_server(deps.operator_inbox, deps.msg_port)
+    # Start web dashboard + operator message endpoint
+    web_runner, web_port = await start_web_server(deps, poller, deps.msg_port)
+    deps.msg_port = web_port
 
     logger.info(
         "Coordinator starting: %d models, %d challenges, %d solved",
@@ -100,14 +102,24 @@ async def run_event_loop(
         f"CTF is LIVE. {len(poller.known_challenges)} challenges, "
         f"{len(poller.known_solved)} solved.\n"
         f"Unsolved: {sorted(unsolved) if unsolved else 'NONE'}\n"
-        "Fetch challenges and spawn swarms for all unsolved."
+        "List the challenges and their status, but DO NOT spawn any swarms "
+        "unless the operator explicitly asks you to. Wait for instructions."
     )
 
-    try:
-        await turn_fn(initial_msg)
+    async def _safe_turn(msg: str) -> None:
+        """Send a message to the coordinator LLM without killing the loop
+        (e.g. when no API key is configured yet — web setup can fix it live)."""
+        try:
+            await turn_fn(msg)
+        except Exception as e:
+            logger.warning("Coordinator turn failed (set up API keys in the web dashboard?): %s", e)
 
-        # Auto-spawn swarms for unsolved challenges if coordinator LLM didn't
-        await _auto_spawn_unsolved(deps, poller)
+    try:
+        await _safe_turn(initial_msg)
+
+        # Auto-spawn unsolved challenges only if enabled (off by default — operator spawns via web)
+        if deps.auto_spawn:
+            await _auto_spawn_unsolved(deps, poller)
 
         last_status = asyncio.get_event_loop().time()
 
@@ -123,23 +135,31 @@ async def run_event_loop(
                 if evt.kind == "challenge_solved" and evt.challenge_name in deps.swarms:
                     swarm = deps.swarms[evt.challenge_name]
                     if not swarm.cancel_event.is_set():
-                        swarm.kill()
+                        await swarm.force_stop()
                         logger.info("Auto-killed swarm for: %s", evt.challenge_name)
 
             parts: list[str] = []
             for evt in events:
                 if evt.kind == "new_challenge":
-                    parts.append(f"NEW CHALLENGE: '{evt.challenge_name}' appeared. Spawn a swarm.")
-                    # Auto-spawn for new challenges
-                    await _auto_spawn_one(deps, evt.challenge_name)
+                    if deps.auto_spawn:
+                        parts.append(f"NEW CHALLENGE: '{evt.challenge_name}' appeared. Spawn a swarm.")
+                        await _auto_spawn_one(deps, evt.challenge_name)
+                    else:
+                        parts.append(f"NEW CHALLENGE: '{evt.challenge_name}' appeared. Auto-spawn is OFF — wait for the operator to spawn it.")
                 elif evt.kind == "challenge_solved":
                     parts.append(f"SOLVED: '{evt.challenge_name}' — swarm auto-killed.")
 
             # Detect finished swarms
+            had_finish = False
             for name, task in list(deps.swarm_tasks.items()):
                 if task.done():
                     parts.append(f"SOLVER FINISHED: Swarm for '{name}' completed. Check results or retry.")
                     deps.swarm_tasks.pop(name, None)
+                    had_finish = True
+
+            if had_finish:
+                # Auto-retry persistent ("keep trying until flag") challenges right away.
+                await _maybe_auto_retry(deps, poller, parts, deps.settings)
 
             # Drain solver-to-coordinator messages
             while True:
@@ -169,25 +189,33 @@ async def run_event_loop(
                     f"STATUS: {len(solved_set)} solved, {len(unsolved_set)} unsolved, "
                     f"{len(active)} active swarms. Cost: ${cost_tracker.total_cost_usd:.2f}"
                 )
+                budget_cap = getattr(deps.settings, "max_total_cost_usd", 0.0)
+                if cost_tracker.over_budget(budget_cap):
+                    status_line += (
+                        f"\nBUDGET WARNING: total spend ${cost_tracker.total_cost_usd:.2f} "
+                        f"has exceeded the configured cap of ${budget_cap:.2f}. "
+                        "Consider killing low-priority swarms or asking the operator before spawning more."
+                    )
                 # Only send to coordinator if there's something happening
                 if active or parts:
                     parts.append(status_line)
                 else:
                     logger.info(f"Event -> coordinator: {status_line}")
+                # Give deferred auto-retries a chance when capacity frees up.
+                await _maybe_auto_retry(deps, poller, parts, deps.settings)
 
             if parts:
                 msg = "\n\n".join(parts)
                 logger.info("Event -> coordinator: %s", msg[:200])
-                await turn_fn(msg)
+                await _safe_turn(msg)
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Coordinator shutting down...")
     except Exception as e:
         logger.error("Coordinator fatal: %s", e, exc_info=True)
     finally:
-        if msg_server:
-            msg_server.close()
-            await msg_server.wait_closed()
+        if web_runner:
+            await web_runner.cleanup()
         await poller.stop()
         for swarm in deps.swarms.values():
             swarm.kill()
@@ -216,7 +244,9 @@ async def _auto_spawn_one(deps: CoordinatorDeps, challenge_name: str) -> None:
     if active >= deps.max_concurrent_challenges:
         return
     try:
-        from backend.agents.coordinator_core import do_spawn_swarm
+        from backend.agents.coordinator_core import _ready_model_specs, do_spawn_swarm
+        if not _ready_model_specs(deps):
+            return
         result = await do_spawn_swarm(deps, challenge_name)
         logger.info(f"Auto-spawn {challenge_name}: {result[:100]}")
     except Exception as e:
@@ -230,51 +260,71 @@ async def _auto_spawn_unsolved(deps: CoordinatorDeps, poller) -> None:
         await _auto_spawn_one(deps, name)
 
 
-async def _start_msg_server(inbox: asyncio.Queue, port: int = 0) -> asyncio.Server | None:
-    """Start a tiny HTTP server that accepts operator messages via POST."""
-
-    async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            # Read HTTP request
-            request_line = await asyncio.wait_for(reader.readline(), timeout=5)
-            headers: dict[str, str] = {}
-            while True:
-                line = await asyncio.wait_for(reader.readline(), timeout=5)
-                if line in (b"\r\n", b"\n", b""):
-                    break
-                if b":" in line:
-                    k, v = line.decode().split(":", 1)
-                    headers[k.strip().lower()] = v.strip()
-
-            method = request_line.decode().split()[0] if request_line else ""
-            content_length = int(headers.get("content-length", 0))
-
-            if method == "POST" and content_length > 0:
-                body = await asyncio.wait_for(reader.read(content_length), timeout=5)
-                try:
-                    data = json.loads(body)
-                    message = data.get("message", body.decode())
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    message = body.decode("utf-8", errors="replace")
-
-                inbox.put_nowait(message)
-                resp = json.dumps({"ok": True, "queued": message[:200]})
-                writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(resp)}\r\n\r\n{resp}".encode())
-            else:
-                resp = json.dumps({"error": "POST with JSON body required", "usage": "POST {\"message\": \"...\"}"})
-                writer.write(f"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {len(resp)}\r\n\r\n{resp}".encode())
-
-            await writer.drain()
-        except Exception:
-            pass
-        finally:
-            writer.close()
-
+async def _maybe_auto_retry(deps: CoordinatorDeps, poller, parts: list[str], settings) -> None:
+    """Keep trying persistent challenges: whenever one has no running swarm and is
+    still unsolved, spawn a fresh attempt (new context) with guidance from the
+    previous rounds. Stops on solve, kill, no ready models, or the attempt cap
+    (max_attempts_per_challenge; 0 = until the operator stops it)."""
+    if not deps.persistent_challenges:
+        return
     try:
-        server = await asyncio.start_server(_handle, "127.0.0.1", port)
-        actual_port = server.sockets[0].getsockname()[1]
-        logger.info(f"Operator message endpoint listening on http://127.0.0.1:{actual_port}")
-        return server
-    except OSError as e:
-        logger.warning(f"Could not start operator message endpoint: {e}")
-        return None
+        from backend.agents.coordinator_core import (
+            _ready_model_specs,
+            attempt_guidance,
+            do_spawn_swarm,
+            should_retry,
+        )
+    except Exception:
+        return
+
+    cap = getattr(settings, "max_attempts_per_challenge", 3)
+    solved = set(poller.known_solved) | {n for n, r in deps.results.items() if r.get("flag")}
+
+    for name in list(deps.persistent_challenges):
+        if name in solved:
+            deps.persistent_challenges.discard(name)
+            continue
+        if name in deps.swarm_tasks or name in deps.swarms:
+            continue  # already running
+        if not should_retry(deps, name, solved, cap):
+            deps.persistent_challenges.discard(name)
+            logger.warning("Attempt cap (%s) reached for '%s' — auto-retry stopped", cap, name)
+            continue
+        if not _ready_model_specs(deps):
+            deps.persistent_challenges.discard(name)
+            logger.warning("No ready models — auto-retry stopped for '%s'", name)
+            continue
+
+        # Summarize the previous (finished) round before do_spawn_swarm retires it.
+        old_swarm = deps.swarms.get(name)
+        prev_round_summary = "no findings recorded"
+        if old_swarm is not None:
+            try:
+                agents = old_swarm.get_status().get("agents", {})
+                bits = [f"[{spec}] {a.get('findings', '')[:200]}" for spec, a in agents.items()
+                        if a.get("findings")]
+                if bits:
+                    prev_round_summary = "; ".join(bits)[:600]
+            except Exception:
+                pass
+
+        prev = deps.attempts.get(name, 0)
+        msg = await do_spawn_swarm(deps, name)
+        if name not in deps.swarms:
+            # At capacity or a transient failure — stay enabled, retry next cycle.
+            parts.append(f"AUTO-RETRY: next attempt for '{name}' deferred ({msg[:120]})")
+            continue
+
+        new_attempt = prev + 1
+        deps.attempts[name] = new_attempt
+        deps.attempt_notes.setdefault(name, []).append(
+            f"Round {prev}: {prev_round_summary}"
+        )
+        guidance = attempt_guidance(deps, name, new_attempt)
+        try:
+            await deps.swarms[name].message_bus.broadcast(guidance)
+        except Exception:
+            logger.warning("Auto-retry guidance broadcast failed", exc_info=True)
+        parts.append(f"AUTO-RETRY: attempt #{new_attempt} started for '{name}'")
+        logger.info("Auto-retry attempt #%d for '%s'", new_attempt, name)
+

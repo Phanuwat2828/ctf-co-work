@@ -61,8 +61,16 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 }
 
 
+# Rough default for unknown/custom models (per 1M tokens, USD)
+DEFAULT_PRICING: dict[str, float] = {
+    "input": 1.00,
+    "cached_input": 0.10,
+    "output": 8.00,
+}
+
+
 def _calc_fallback_cost(usage: RunUsage, model: str) -> float | None:
-    pricing = FALLBACK_PRICING.get(model)
+    pricing = FALLBACK_PRICING.get(model) or DEFAULT_PRICING
     if not pricing:
         return None
     input_rate = pricing.get("input", 0)
@@ -174,6 +182,12 @@ class CostTracker:
     @property
     def total_cost_usd(self) -> float:
         return sum(a.cost_usd for a in self.by_agent.values())
+
+    def over_budget(self, cap_usd: float) -> bool:
+        """True if total spend exceeds cap_usd. cap_usd <= 0 means no cap (always False)."""
+        if cap_usd <= 0:
+            return False
+        return self.total_cost_usd >= cap_usd
 
     @property
     def total_tokens(self) -> int:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -11,9 +12,18 @@ import click
 from rich.console import Console
 
 from backend.config import Settings
-from backend.models import DEFAULT_MODELS
 
 console = Console()
+
+
+def _default_model_specs() -> list[str]:
+    """Default model lineup — derived from providers.json (seeded on first run)."""
+    from backend.providers import model_specs_from_providers
+    specs = model_specs_from_providers()
+    if specs:
+        return specs
+    from backend.models import DEFAULT_MODELS
+    return list(DEFAULT_MODELS)
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -39,7 +49,7 @@ def _setup_logging(verbose: bool = False) -> None:
 @click.option("--coordinator-model", default=None, help="Model for coordinator (default: claude-opus-4-6)")
 @click.option("--coordinator", default="claude", type=click.Choice(["claude", "codex"]), help="Coordinator backend")
 @click.option("--max-challenges", default=10, type=int, help="Max challenges solved concurrently")
-@click.option("--msg-port", default=0, type=int, help="Operator message port (0 = auto)")
+@click.option("--web-port", default=9400, type=int, help="Web dashboard port (0 = auto)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
 def main(
     ctfd_url: str | None,
@@ -52,7 +62,7 @@ def main(
     coordinator_model: str | None,
     coordinator: str,
     max_challenges: int,
-    msg_port: int,
+    web_port: int,
     verbose: bool,
 ) -> None:
     """CTF Agent — multi-model solver swarm.
@@ -61,6 +71,16 @@ def main(
     """
     _setup_logging(verbose)
 
+    # Make the on-demand CTF skill library visible to sandboxes if present.
+    skills_dir = Path(__file__).resolve().parent.parent / "agent_skills"
+    if skills_dir.is_dir():
+        os.environ.setdefault("CTF_SKILLS_DIR", str(skills_dir))
+
+    from backend.tracing import prune_old_logs
+    removed = prune_old_logs()
+    if removed:
+        console.print(f"[dim]Pruned {removed} old trace log(s).[/dim]")
+
     settings = Settings(sandbox_image=image)
     if ctfd_url:
         settings.ctfd_url = ctfd_url
@@ -68,7 +88,7 @@ def main(
         settings.ctfd_token = ctfd_token
     settings.max_concurrent_challenges = max_challenges
 
-    model_specs = list(models) if models else list(DEFAULT_MODELS)
+    model_specs = list(models) if models else list(_default_model_specs())
 
     console.print("[bold]CTF Agent v2[/bold]")
     console.print(f"  CTFd: {settings.ctfd_url}")
@@ -80,7 +100,7 @@ def main(
     if challenge:
         asyncio.run(_run_single(settings, challenge, model_specs, no_submit, max_challenges))
     else:
-        asyncio.run(_run_coordinator(settings, model_specs, challenges_dir, no_submit, coordinator_model, coordinator, max_challenges, msg_port))
+        asyncio.run(_run_coordinator(settings, model_specs, challenges_dir, no_submit, coordinator_model, coordinator, max_challenges, web_port))
 
 
 async def _run_single(
@@ -115,6 +135,7 @@ async def _run_single(
         token=settings.ctfd_token,
         username=settings.ctfd_user,
         password=settings.ctfd_pass,
+        session_cookie=settings.ctfd_session_cookie,
     )
     cost_tracker = CostTracker()
 
@@ -132,6 +153,8 @@ async def _run_single(
         result = await swarm.run()
         from backend.solver_base import FLAG_FOUND
         if result and result.status == FLAG_FOUND:
+            from backend.flaglog import record_flag
+            record_flag(meta.name, result.flag)
             console.print(f"\n[bold green]FLAG FOUND:[/bold green] {result.flag}")
         else:
             console.print("\n[bold red]No flag found.[/bold red]")
@@ -152,7 +175,7 @@ async def _run_coordinator(
     coordinator_model: str | None,
     coordinator_backend: str,
     max_challenges: int,
-    msg_port: int = 0,
+    web_port: int = 9400,
 ) -> None:
     """Run the full coordinator (continuous until Ctrl+C)."""
     from backend.sandbox import cleanup_orphan_containers, configure_semaphore
@@ -170,7 +193,7 @@ async def _run_coordinator(
             challenges_root=challenges_dir,
             no_submit=no_submit,
             coordinator_model=coordinator_model,
-            msg_port=msg_port,
+            web_port=web_port,
         )
     else:
         from backend.agents.claude_coordinator import run_claude_coordinator
@@ -180,7 +203,7 @@ async def _run_coordinator(
             challenges_root=challenges_dir,
             no_submit=no_submit,
             coordinator_model=coordinator_model,
-            msg_port=msg_port,
+            web_port=web_port,
         )
 
     console.print("\n[bold]Final Results:[/bold]")
@@ -193,16 +216,20 @@ async def _run_coordinator(
 @click.argument("message")
 @click.option("--port", default=9400, type=int, help="Coordinator message port")
 @click.option("--host", default="127.0.0.1", help="Coordinator host")
-def msg(message: str, port: int, host: str) -> None:
+@click.option("--token", default=None, envvar="WEBUI_TOKEN", help="Dashboard access token (if WEBUI_TOKEN is set)")
+def msg(message: str, port: int, host: str, token: str | None) -> None:
     """Send a message to the running coordinator."""
     import json
     import urllib.request
 
     body = json.dumps({"message": message}).encode()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         f"http://{host}:{port}/msg",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

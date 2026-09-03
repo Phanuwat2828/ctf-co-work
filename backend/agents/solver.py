@@ -25,10 +25,18 @@ from backend.models import (
     resolve_model_settings,
     supports_vision,
 )
-from backend.output_types import FlagFound
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
-from backend.solver_base import CANCELLED, CORRECT_MARKERS, ERROR, FLAG_FOUND, GAVE_UP, SolverResult
+from backend.solver_base import (
+    CANCELLED,
+    CORRECT_MARKERS,
+    ERROR,
+    FLAG_FOUND,
+    GAVE_UP,
+    SolverResult,
+    role_display_label,
+    role_system_section,
+)
 from backend.tools.flag import submit_flag
 from backend.tools.sandbox import (
     bash,
@@ -117,9 +125,12 @@ class Solver:
         cancel_event: asyncio.Event | None = None,
         sandbox: DockerSandbox | None = None,
         owns_sandbox: bool | None = None,
+        role: str = "",
     ) -> None:
         self.model_spec = model_spec
         self.model_id = model_id_from_spec(model_spec)
+        self.role = role
+        self._label = role_display_label(self.model_id, role)
         self.challenge_dir = challenge_dir
         self.meta = meta
         self.ctfd = ctfd
@@ -144,9 +155,9 @@ class Solver:
             cost_tracker=cost_tracker,
         )
         self.loop_detector = LoopDetector()
-        self.tracer = SolverTracer(meta.name, self.model_id)
-        self.agent_name = f"{meta.name}/{self.model_id}"
-        self._agent: Agent[SolverDeps, FlagFound] | None = None
+        self.tracer = SolverTracer(meta.name, self._label)
+        self.agent_name = f"{meta.name}/{self._label}"
+        self._agent: Agent[SolverDeps, Any] | None = None
         self._messages: list = []
         self._step_count = [0]  # mutable ref shared with TracingToolset
         self._flag: str | None = None
@@ -168,6 +179,8 @@ class Solver:
             distfile_names,
             container_arch=container_arch,
         )
+        if self.role:
+            system_prompt += role_system_section(self.role)
 
         model = resolve_model(self.model_spec, self.settings)
         model_settings = resolve_model_settings(self.model_spec)
@@ -185,7 +198,6 @@ class Solver:
             system_prompt=system_prompt,
             model_settings=model_settings,
             toolsets=[toolset],
-            output_type=FlagFound,
         )
 
         self.tracer.event("start", challenge=self.meta.name, model=self.model_id)
@@ -210,7 +222,7 @@ class Solver:
             )
 
             duration = time.monotonic() - t0
-            usage = result.usage()
+            usage = result.usage  # property in pydantic-ai >= 2.x (was a method in 1.x)
 
             self.cost_tracker.record(
                 self.agent_name, usage, self.model_id,
@@ -240,17 +252,24 @@ class Solver:
                         output_tokens=msg_usage.output_tokens if msg_usage else 0,
                     )
 
+            # Flag detection: the model is expected to call submit_flag (which sets
+            # deps.confirmed_flag on success). For dry-run (no_submit) we parse a
+            # `FLAG: <value>` line from the final output instead of relying on a
+            # structured output type (which many models fail to produce).
             output = result.output
-            if isinstance(output, FlagFound):
-                self._flag = output.flag
-                self._findings = f"Flag found via {output.method}: {output.flag}"
-                # In dry-run mode, structured output is sufficient (can't verify via CTFd)
-                if self.deps.no_submit:
-                    self._confirmed = True
-            # CTFd confirmation always counts (the primary path when not in dry-run)
+            if isinstance(output, str):
+                self._findings = output.strip()[:2000]
             if self.deps.confirmed_flag:
                 self._confirmed = True
                 self._flag = self._flag or self.deps.confirmed_flag
+            elif self.deps.no_submit and output:
+                text = output if isinstance(output, str) else str(output)
+                import re as _re
+                m = _re.search(r"FLAG\s*[:=]\s*(\S+)", text, _re.IGNORECASE)
+                if m and m.group(1).lower() not in ("unsolved", "n/a", "none", "placeholder"):
+                    self._flag = m.group(1).strip(".,;:\"'`")
+                    self._confirmed = True
+                    self._findings = f"Flag found (dry-run parse): {self._flag}"
 
             if self._confirmed and self._flag:
                 return self._result(FLAG_FOUND)
@@ -270,11 +289,17 @@ class Solver:
             parts=[
                 UserPromptPart(
                     content=(
-                        "Your previous attempt did not find the flag. Here are insights "
-                        "from other agents working on the same challenge:\n\n"
+                        "Your previous attempt did not find the flag, but you must KEEP GOING — "
+                        "giving up is not an option.\n\n"
+                        "Insights from other agents working on the same challenge:\n\n"
                         f"{insights}\n\n"
-                        "Use these insights to try a different approach. "
-                        "Do NOT repeat what has already been tried."
+                        "Instructions:\n"
+                        "- Do NOT output 'UNSOLVED', 'N/A', or any placeholder flag.\n"
+                        "- Assume your earlier attempts missed something. Pick ONE new technique "
+                        "you have not tried yet and execute it now with tools.\n"
+                        "- Re-examine the description and every distfile you have not fully analyzed.\n"
+                        "- Verify every candidate flag with submit_flag before finishing.\n"
+                        "- Only stop when submit_flag returns CORRECT."
                     )
                 )
             ]

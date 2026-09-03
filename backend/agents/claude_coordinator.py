@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -105,65 +106,85 @@ def _build_coordinator_mcp(deps: CoordinatorDeps):
     )
 
 
-async def run_claude_coordinator(
-    settings: Settings,
-    model_specs: list[str] | None = None,
-    challenges_root: str = "challenges",
-    no_submit: bool = False,
-    coordinator_model: str | None = None,
-    msg_port: int = 0,
-) -> dict[str, Any]:
-    """Run the Claude Agent SDK coordinator with the shared event loop."""
-    ctfd, cost_tracker, deps = build_deps(
-        settings, model_specs, challenges_root, no_submit,
-    )
-    deps.msg_port = msg_port
+class LazyClaudeCoordinator:
+    """Claude SDK coordinator that initializes lazily on the first turn.
 
-    mcp_server = _build_coordinator_mcp(deps)
-    resolved_model = coordinator_model or "claude-opus-4-6"
+    This lets the whole system start with an empty .env — the coordinator is
+    created only after API keys are provided (via the web setup panel).
+    """
 
-    allowed = {
-        "mcp__coordinator__fetch_challenges", "mcp__coordinator__get_solve_status",
-        "mcp__coordinator__spawn_swarm", "mcp__coordinator__check_swarm_status",
-        "mcp__coordinator__submit_flag", "mcp__coordinator__kill_swarm",
-        "mcp__coordinator__bump_agent", "mcp__coordinator__broadcast",
-        "mcp__coordinator__read_solver_trace",
-        "ToolSearch",
-        "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-    }
+    def __init__(self, deps: CoordinatorDeps, model: str = "claude-opus-4-6") -> None:
+        self.deps = deps
+        self.model = model
+        self._cm = None
+        self._client = None
+        self._last_error: Exception | None = None
 
-    async def enforce_allowlist(input_data, tool_use_id, context):
-        if input_data.get("hook_event_name") != "PreToolUse":
-            return {}
-        tool = input_data.get("tool_name", "")
-        if tool in allowed:
-            return {}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"{tool} not available to coordinator.",
-            }
+    async def _ensure_started(self) -> bool:
+        if self._client is not None:
+            return True
+        mcp_server = _build_coordinator_mcp(self.deps)
+        allowed = {
+            "mcp__coordinator__fetch_challenges", "mcp__coordinator__get_solve_status",
+            "mcp__coordinator__spawn_swarm", "mcp__coordinator__check_swarm_status",
+            "mcp__coordinator__submit_flag", "mcp__coordinator__kill_swarm",
+            "mcp__coordinator__bump_agent", "mcp__coordinator__broadcast",
+            "mcp__coordinator__read_solver_trace",
+            "ToolSearch",
+            "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
         }
 
-    options = ClaudeAgentOptions(
-        model=resolved_model,
-        system_prompt=COORDINATOR_PROMPT,
-        env={"CLAUDECODE": ""},
-        mcp_servers={"coordinator": mcp_server},
-        allowed_tools=list(allowed),
-        permission_mode="bypassPermissions",
-        hooks={
-            "PreToolUse": [HookMatcher(hooks=[enforce_allowlist])],
-        },
-    )
+        async def enforce_allowlist(input_data, tool_use_id, context):
+            if input_data.get("hook_event_name") != "PreToolUse":
+                return {}
+            tool = input_data.get("tool_name", "")
+            if tool in allowed:
+                return {}
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"{tool} not available to coordinator.",
+                }
+            }
 
-    async with ClaudeSDKClient(options=options) as client:
-        async def turn_fn(msg: str) -> None:
+        options = ClaudeAgentOptions(
+            model=self.model,
+            system_prompt=COORDINATOR_PROMPT,
+            env={"CLAUDECODE": ""},
+            mcp_servers={"coordinator": mcp_server},
+            allowed_tools=list(allowed),
+            permission_mode="bypassPermissions",
+            hooks={
+                "PreToolUse": [HookMatcher(hooks=[enforce_allowlist])],
+            },
+        )
+        try:
+            self._cm = ClaudeSDKClient(options=options)
+            self._client = await asyncio.wait_for(self._cm.__aenter__(), timeout=60)
+            self._last_error = None
+            return True
+        except asyncio.TimeoutError:
+            self._last_error = "Claude SDK client init timed out (missing/incorrect API key?)"
+            self._cm = None
+            self._client = None
+            logger.warning("Claude coordinator init timed out — set API key in the web dashboard and retry.")
+            return False
+        except Exception as e:
+            self._last_error = e
+            self._cm = None
+            self._client = None
+            logger.warning("Claude coordinator not ready (set API key in the web dashboard?): %s", e)
+            return False
+
+    async def turn(self, msg: str) -> None:
+        if not await self._ensure_started():
+            return
+        try:
             logger.debug(f"Coordinator query: {msg[:200]}")
-            await client.query(msg)
+            await self._client.query(msg)
             msg_count = 0
-            async for message in client.receive_response():
+            async for message in self._client.receive_response():
                 msg_count += 1
                 msg_type = type(message).__name__
                 logger.debug(f"Coordinator received: {msg_type}")
@@ -173,5 +194,37 @@ async def run_claude_coordinator(
                     logger.info(f"Claude coordinator turn done (messages={msg_count}, cost=${cost:.4f}, session={session})")
             if msg_count == 0:
                 logger.warning("Coordinator turn produced no messages!")
+        except Exception as e:
+            logger.warning("Coordinator turn failed: %s", e)
 
-        return await run_event_loop(deps, ctfd, cost_tracker, turn_fn)
+    async def stop(self) -> None:
+        if self._cm is not None:
+            try:
+                await self._cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._cm = None
+            self._client = None
+
+
+async def run_claude_coordinator(
+    settings: Settings,
+    model_specs: list[str] | None = None,
+    challenges_root: str = "challenges",
+    no_submit: bool = False,
+    coordinator_model: str | None = None,
+    web_port: int = 0,
+) -> dict[str, Any]:
+    """Run the Claude Agent SDK coordinator with the shared event loop."""
+    ctfd, cost_tracker, deps = build_deps(
+        settings, model_specs, challenges_root, no_submit,
+    )
+    deps.msg_port = web_port
+
+    resolved_model = coordinator_model or "claude-opus-4-6"
+    coordinator = LazyClaudeCoordinator(deps, model=resolved_model)
+
+    try:
+        return await run_event_loop(deps, ctfd, cost_tracker, coordinator.turn)
+    finally:
+        await coordinator.stop()

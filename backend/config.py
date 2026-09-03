@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ctfd_user: str = "admin"
     ctfd_pass: str = "admin"
     ctfd_token: str = ""
+    ctfd_session_cookie: str = ""
 
     # API Keys
     anthropic_api_key: str = ""
@@ -29,5 +30,9 @@ class Settings(BaseSettings):
     max_concurrent_challenges: int = 10
     max_attempts_per_challenge: int = 3
     container_memory_limit: str = "16g"
+
+    # Web dashboard
+    webui_token: str = ""  # empty = no auth (default). Set to require Bearer token on API routes.
+    max_total_cost_usd: float = 0.0  # 0 = no cap. Coordinator gets warned when total spend exceeds this.
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}

@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CTF Sandbox — CO WORK</title>
+<style>
+  :root {
+    --bg: #0f1115; --bg2: #0b0d11;
+    --panel: #161a20; --panel2: #1b2028;
+    --border: #242a33; --border2: #2d3540;
+    --text: #e3e7ee; --muted: #9aa3b0;
+    --blue: #4f8cff; --green: #3fb950; --red: #e5534b; --yellow: #c9971b; --purple: #a88cf6;
+    --radius: 8px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+  /* Top bar */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    padding: 0 24px; height: 56px;
+    background: rgba(15,17,21,.92); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand .name { font-size: 16px; font-weight: 700; letter-spacing: .02em; }
+  .brand .name span { color: var(--blue); }
+  .brand .tag { font-size: 11px; color: var(--muted); }
+  .topbar .spacer { flex: 1; }
+  .navbtn {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; transition: all .15s ease;
+  }
+  .navbtn:hover { border-color: var(--border2); background: var(--panel2); }
+  .navbtn.primary { border-color: var(--blue); color: var(--blue); }
+  .navbtn.primary:hover { background: rgba(79,140,255,.1); }
+  #h-lastupdate { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+  /* KPI strip */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 16px 24px 4px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+  .kpi .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .kpi .v { font-size: 18px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .v.green { color: var(--green); }
+  .kpi .v.blue { color: var(--blue); }
+  .kpi .v.yellow { color: var(--yellow); }
+  .kpi .v.red { color: var(--red); }
+
+  #setup-banner {
+    display: none; margin: 14px 24px 0; padding: 10px 14px;
+    background: rgba(201,151,27,.08); border: 1px solid rgba(201,151,27,.35);
+    border-radius: var(--radius); color: var(--yellow); font-size: 13px;
+  }
+
+  /* Layout */
+  .wrap { padding: 14px 24px 24px; }
+  main { width: 100%; }
+  .section-title { font-size: 13px; font-weight: 650; color: var(--muted);
+                   text-transform: uppercase; letter-spacing: .07em; margin: 6px 0 10px; }
+
+  /* Challenge table */
+  .table-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--border);
+             background: var(--bg2); font-weight: 600; }
+  tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.solved { opacity: .55; }
+  tbody tr:hover { background: rgba(255,255,255,.015); }
+  .ch-name { font-weight: 600; word-break: break-word; display: flex; align-items: center; gap: 8px; }
+  .act-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .act-dot.active { background: var(--green); box-shadow: 0 0 6px rgba(63,185,80,.8); animation: pulse 1.2s infinite; }
+  .act-dot.idle { background: var(--muted); }
+  @keyframes pulse { 0% { opacity: 1; } 50% { opacity: .35; } 100% { opacity: 1; } }
+  .ch-spark { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .ch-spark svg { display: block; }
+  .ch-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px;
+           text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  .b-solved { background: rgba(63,185,80,.14); color: var(--green); }
+  .b-unsolved { background: rgba(79,140,255,.14); color: var(--blue); }
+  .b-running { background: rgba(201,151,27,.14); color: var(--yellow); }
+
+  .flag { font-family: var(--mono); color: var(--green); font-size: 12.5px; word-break: break-all; margin-top: 4px; }
+  .flag .copy-btn { margin-left: 8px; padding: 0 6px; font-size: 11px; color: var(--green);
+                    background: transparent; border: 1px solid rgba(63,185,80,.35); border-radius: 5px;
+                    cursor: pointer; vertical-align: middle; }
+  .flag .copy-btn:hover { background: rgba(63,185,80,.15); }
+
+  .rowbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+         border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: all .15s ease; }
+  .btn:hover { border-color: var(--border2); background: #232a34; }
+  .btn.primary { border-color: var(--blue); color: var(--blue); }
+  .btn.primary:hover { background: rgba(79,140,255,.1); }
+  .btn.danger { border-color: rgba(229,83,75,.5); color: var(--red); }
+  .btn.danger:hover { background: rgba(229,83,75,.1); }
+  .btn.warn { border-color: rgba(201,151,27,.5); color: var(--yellow); }
+  .btn.warn:hover { background: rgba(201,151,27,.1); }
+
+  .empty { color: var(--muted); text-align: center; padding: 48px; }
+
+  /* Modals */
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.62); z-index: 40;
+             align-items: center; justify-content: center; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+           width: min(620px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
+           box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .modal.wide { width: min(860px, 94vw); height: 82vh; }
+  .modal.small { width: min(440px, 94vw); height: auto; }
+  .modal .m-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+                   border-bottom: 1px solid var(--border); font-weight: 650; font-size: 14px; }
+  .modal .m-head .spacer { flex: 1; }
+  .modal .m-body { padding: 16px 18px; overflow: auto; }
+  .modal label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  .modal label b { color: var(--text); font-weight: 600; }
+  .modal input, .modal select, .modal textarea {
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  .modal input:focus, .modal select:focus, .modal textarea:focus { outline: none; border-color: var(--blue); }
+  .field-row { display: flex; gap: 10px; }
+  .field-row > * { flex: 1; }
+  .m-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .m-actions .btn { flex: 1; padding: 9px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* Providers list */
+  .prov-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--bg2); }
+  .prov-card .row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .prov-card .base { flex: 1; color: var(--muted); font-size: 11px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prov-card .row2 { color: var(--muted); font-size: 11px; margin-top: 5px; }
+
+  /* Spawn model selector */
+  #spawn-models { max-height: 42vh; overflow-y: auto; }
+  .spawn-group { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
+  .spawn-group-name { padding: 4px 10px; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em;
+                      color: var(--blue); background: var(--bg2); border-bottom: 1px solid var(--border); }
+  .spawn-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+                border-bottom: 1px solid var(--border); transition: background .12s ease; }
+  .spawn-item:last-child { border-bottom: none; }
+  .spawn-item:hover { background: rgba(79,140,255,.06); }
+  .spawn-item input { width: 14px; height: 14px; accent-color: var(--blue); cursor: pointer; flex: none; }
+  .spawn-model { font-family: var(--mono); font-weight: 600; font-size: 12px; }
+  .spawn-spec { color: var(--muted); font-size: 10px; font-family: var(--mono); margin-left: auto; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+  .spawn-tools { display: flex; gap: 8px; font-size: 11px; }
+  .spawn-tools a { color: var(--blue); cursor: pointer; }
+
+  /* Test results */
+  .test-item { padding: 4px 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .test-item .ok { color: var(--green); font-weight: 700; }
+  .test-item .fail { color: var(--red); font-weight: 700; }
+  .test-item .url { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .test-item .det { color: var(--muted); font-size: 11px; width: 100%; }
+
+  /* Trace modal */
+  #trace { flex: 1; overflow: auto; margin: 0; padding: 14px 18px; font-family: var(--mono); font-size: 12px;
+           white-space: pre-wrap; word-break: break-word; color: #c9d1d9; }
+
+  /* Toast */
+  #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+           border: 1px solid var(--border2); border-radius: 8px; padding: 10px 16px; display: none;
+           max-width: 80vw; z-index: 60; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+
+  #setup-msg, #prov-msg { font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  #test-results { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; font-size: 12px; }
+
+  @media (max-width: 900px) { .wrap { flex-direction: column; } }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="name">CTF <span>Sandbox</span></div><div class="tag">CO WORK</div></div>
+  <div class="spacer"></div>
+  <span id="h-lastupdate"></span>
+  <button class="navbtn" id="autospawn-btn" onclick="toggleAutoSpawn()">Auto-spawn: OFF</button>
+  <button class="navbtn" onclick="openLogs()">Logs</button>
+  <button class="navbtn" onclick="openProviders()">Providers</button>
+  <button class="navbtn primary" onclick="openSetup()">Settings</button>
+</header>
+
+<div id="setup-banner">Setup required — add providers and a CTFd URL to enable solving. Open <b>Settings</b> and <b>Providers</b> above.</div>
+<div id="docker-banner" style="display:none;margin:14px 24px 0;padding:10px 14px;background:rgba(229,83,75,.08);border:1px solid rgba(229,83,75,.4);border-radius:var(--radius);color:var(--red);font-size:13px">
+  Docker daemon is not accessible — solvers cannot start containers. Ensure your user is in the <code>docker</code> group and restart the coordinator from a fresh session (<code>newgrp docker</code> or re-login).
+</div>
+<div id="budget-banner" style="display:none;margin:14px 24px 0;padding:10px 14px;background:rgba(229,83,75,.08);border:1px solid rgba(229,83,75,.4);border-radius:var(--radius);color:var(--red);font-size:13px"></div>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">CTFd</div><div class="v blue" id="h-ctfd">-</div></div>
+  <div class="kpi"><div class="k">Cost</div><div class="v" id="h-cost">$0.00</div></div>
+  <div class="kpi"><div class="k">Tokens</div><div class="v" id="h-tokens">0</div></div>
+  <div class="kpi"><div class="k">Solved</div><div class="v green" id="h-solved">-</div></div>
+  <div class="kpi"><div class="k">Unsolved</div><div class="v red" id="h-unsolved">-</div></div>
+  <div class="kpi"><div class="k">Active swarms</div><div class="v yellow" id="h-active">-</div></div>
+</div>
+
+<div class="wrap">
+  <main>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div class="section-title" style="margin:0">Challenges</div>
+      <span style="flex:1"></span>
+      <button class="btn primary" onclick="openAddChallenge()">Add challenge</button>
+    </div>
+    <div class="table-wrap"><table id="ch-table"><thead>
+      <tr><th style="width:36%">Challenge</th><th style="width:12%">Status</th><th style="width:52%">Actions</th></tr>
+    </thead><tbody id="ch-body"><tr><td colspan="3"><div class="empty">Loading…</div></td></tr></tbody></table></div>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<!-- Trace modal -->
+<div class="overlay" id="trace-modal"><div class="modal wide">
+  <div class="m-head"><span id="m-title">Trace</span>
+    <select id="m-model" onchange="loadTrace()"></select>
+    <span class="spacer"></span>
+    <button class="btn" onclick="closeModal()">Close</button>
+  </div>
+  <pre id="trace"></pre>
+</div></div>
+
+<!-- Add challenge modal -->
+<div class="overlay" id="addch-modal"><div class="modal small">
+  <div class="m-head"><span>Add challenge</span><span class="spacer"></span><button class="btn" onclick="closeAddChallenge()">Close</button></div>
+  <div class="m-body">
+    <div class="hint" style="margin-bottom:10px">Custom challenge — solved without CTFd. The solver reports the flag it finds directly.</div>
+    <label><b>Name</b><input id="ac-name" placeholder="e.g. My Crypto Challenge"></label>
+    <label style="margin-top:10px"><b>Category</b><input id="ac-category" placeholder="crypto / web / pwn / misc…"></label>
+    <label style="margin-top:10px"><b>Points</b><input id="ac-value" type="number" value="100"></label>
+    <label style="margin-top:10px"><b>Connection info</b> <span class="hint">(optional — service the solver must connect to)</span><input id="ac-conn" placeholder="nc host.docker.internal 1337  |  https://..."></label>
+    <label style="margin-top:10px"><b>Description</b><textarea id="ac-desc" rows="5" placeholder="Describe the challenge…"></textarea></label>
+    <label style="margin-top:10px"><b>Distfiles</b> <span class="hint">(optional — files the solver can inspect)</span><input id="ac-files" type="file" multiple></label>
+    <div class="m-actions">
+      <button class="btn primary" id="btn-addch" onclick="addChallenge()">Add challenge</button>
+    </div>
+    <div id="addch-msg" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+  </div>
+</div></div>
+
+<!-- Spawn modal -->
+<div class="overlay" id="spawn-modal"><div class="modal" style="width:min(360px,92vw)">
+  <div class="m-head"><span id="spawn-title" style="font-size:13px">Spawn swarm</span><span class="spacer"></span><button class="btn" onclick="closeSpawn()">Close</button></div>
+  <div class="m-body" style="padding:12px 14px">
+    <div class="hint" style="margin-bottom:8px;font-size:11px">Select 1–5 models:</div>
+    <div class="spawn-tools" style="margin-bottom:8px;font-size:11px">
+      <a onclick="selectAllSpawn(true)">Select all</a> ·
+      <a onclick="selectAllSpawn(false)">None</a>
+    </div>
+    <div id="spawn-models" style="display:flex;flex-direction:column"></div>
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)" id="spawn-count"></div>
+    <label style="margin-top:10px;display:flex;flex-direction:row;gap:6px;align-items:center;font-size:12px;color:var(--text)">
+      <input type="checkbox" id="sp-role" onchange="updateRoleFields()"> <b>Let AI split roles</b>
+      <span style="color:var(--muted)">— one agent per strategy (may reuse models)</span>
+    </label>
+    <div id="sp-role-fields" style="display:none;margin-top:8px">
+      <label style="font-size:12px;color:var(--muted)"><b>Agent count</b>
+        <input type="number" id="sp-count" min="1" value="0" style="margin-top:3px">
+        <span style="font-size:11px">0 = auto (one per selected model)</span></label>
+      <label style="font-size:12px;color:var(--muted);margin-top:8px"><b>Instruction for the planner (optional)</b>
+        <textarea id="sp-instr" rows="2" placeholder="e.g. focus one agent on the network side, one on static analysis" style="margin-top:3px"></textarea></label>
+    </div>
+    <div class="m-actions" style="margin-top:10px">
+      <button class="btn primary" id="btn-spawn" onclick="doSpawn()" style="padding:6px">Spawn</button>
+      <button class="btn" onclick="closeSpawn()" style="padding:6px">Cancel</button>
+    </div>
+    <div id="spawn-msg" style="margin-top:6px;font-size:11px;color:var(--muted)"></div>
+  </div>
+</div></div>
+
+<!-- Logs modal -->
+<div class="overlay" id="logs-modal"><div class="modal wide">
+  <div class="m-head"><span>Logs</span><span class="spacer"></span><button class="btn" onclick="closeLogs()">Close</button></div>
+  <div class="m-body">
+    <div id="log-list" style="display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+</div></div>
+
+<!-- Settings modal -->
+<div class="overlay" id="setup-modal"><div class="modal small">
+  <div class="m-head"><span>Settings</span><span class="spacer"></span><button class="btn" onclick="closeSetup()">Close</button></div>
+  <div class="m-body">
+    <label><b>CTFd URL</b><input id="f-ctfd-url" placeholder="https://ctf.example.com"></label>
+    <label style="margin-top:12px"><b>CTFd API token</b> <span class="hint">(optional — leave masked to keep)</span><input id="f-ctfd-token" type="password" placeholder="ctfd_your_api_token" autocomplete="off"></label>
+    <label style="margin-top:12px"><b>CTFd session cookie</b> <span class="hint">(use instead of token when logged in via browser — copy the <code>session=</code> value)</span><input id="f-ctfd-session" type="password" placeholder="uuid.secret…" autocomplete="off"></label>
+    <div class="hint" style="margin-top:12px">Add model providers via the <b>Providers</b> button — each with a name, base URL, API key and models.</div>
+    <div class="m-actions">
+      <button class="btn" id="btn-test" onclick="testConfig()">Test</button>
+      <button class="btn primary" id="btn-save" onclick="saveConfig()">Save</button>
+    </div>
+    <div id="test-results" style="display:none"></div>
+    <div id="setup-msg" style="margin-top:8px"></div>
+  </div>
+</div></div>
+
+<!-- Providers modal -->
+<div class="overlay" id="providers-modal"><div class="modal wide">
+  <div class="m-head"><span>Providers</span><span class="spacer"></span><button class="btn" onclick="closeProviders()">Close</button></div>
+  <div class="m-body">
+    <div style="border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:var(--bg2)">
+      <div style="font-size:13px;font-weight:650;margin-bottom:10px">Add provider</div>
+      <div class="field-row">
+        <label><b>Name</b><input id="p-name" placeholder="e.g. DeepSeek, Groq, vLLM…"></label>
+        <label><b>API format</b><select id="p-format"></select></label>
+      </div>
+      <label style="margin-top:12px"><b>Base URL</b><input id="p-base" placeholder="https://api.example.com/v1"></label>
+      <label style="margin-top:12px"><b>API key</b><input id="p-key" type="password" placeholder="Enter API key" autocomplete="new-password"></label>
+      <label style="margin-top:12px"><b>Model list</b> <span class="hint">(one per line)</span>
+        <textarea id="p-models" rows="3" placeholder="model-a&#10;model-b"></textarea></label>
+      <div style="margin-top:12px"><button class="btn primary" id="p-add-btn" onclick="addProvider()">Add provider</button>
+        <span id="prov-msg" style="margin-left:10px"></span></div>
+    </div>
+    <div style="font-size:13px;font-weight:650;margin:16px 0 10px">Saved providers</div>
+    <div id="prov-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div></div>
+
+<script>
+let state = null;
+let toastTimer = null;
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+function busy(btnId, on, restoreLabel) {
+  const b = document.getElementById(btnId);
+  if (!b) return;
+  if (on) {
+    b.dataset.label = b.textContent;
+    b.disabled = true;
+    b.textContent = 'Loading…';
+  } else {
+    b.disabled = false;
+    b.textContent = restoreLabel || b.dataset.label || 'Save';
+  }
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  const token = localStorage.getItem('webui_token');
+  if (token) {
+    opts.headers = Object.assign({}, opts.headers || {}, { 'Authorization': 'Bearer ' + token });
+  }
+  let r = await fetch(path, opts);
+  if (r.status === 401) {
+    const entered = prompt('This dashboard requires an access token. Enter it:', '');
+    if (entered) {
+      localStorage.setItem('webui_token', entered);
+      opts.headers = Object.assign({}, opts.headers || {}, { 'Authorization': 'Bearer ' + entered });
+      r = await fetch(path, opts);
+    }
+  }
+  return r.json();
+}
+
+function fmtTokens(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function trunc(s, n) {
+  s = s == null ? '' : String(s);
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function sparkline(bins, active) {
+  const w = 62, h = 18, bw = 2, gap = 1;
+  const max = Math.max.apply(null, bins.concat([1]));
+  const color = active ? '#3fb950' : '#3d444d';
+  let bars = '';
+  for (let i = 0; i < bins.length; i++) {
+    const bh = Math.max(2, Math.round((bins[i] / max) * (h - 5)));
+    bars += '<rect x="' + (i * (bw + gap)) + '" y="' + (h - bh - 2) + '" width="' + bw + '" height="' + bh + '" fill="' + color + '" rx="0.5"/>';
+  }
+  return '<svg width="' + w + '" height="' + h + '" aria-hidden="true">' + bars + '</svg>';
+}
+
+async function refresh() {
+  try {
+    const s = await api('/api/status');
+    state = s;
+    document.getElementById('h-ctfd').textContent = s.ctfd_url || '-';
+    document.getElementById('h-cost').textContent = '$' + s.total_cost_usd.toFixed(2);
+    document.getElementById('h-tokens').textContent = fmtTokens(s.total_tokens || 0);
+    document.getElementById('h-solved').textContent = (s.solved || []).length;
+    document.getElementById('h-unsolved').textContent = (s.unsolved || []).length;
+    document.getElementById('h-active').textContent = s.active_swarms;
+    document.getElementById('h-lastupdate').textContent = new Date().toLocaleTimeString();
+    const cr = s.config_ready || {};
+    const needsSetup = !(cr.ctfd && (cr.anthropic || cr.openai || cr.gemini)) || !s.has_model_keys;
+    document.getElementById('setup-banner').style.display = needsSetup ? 'block' : 'none';
+    document.getElementById('docker-banner').style.display = (s.docker_ok === false) ? 'block' : 'none';
+    const budgetBanner = document.getElementById('budget-banner');
+    if (s.over_budget) {
+      budgetBanner.textContent = 'Budget cap exceeded: total spend $' + s.total_cost_usd.toFixed(2) +
+        ' has passed the configured cap of $' + s.budget_cap_usd.toFixed(2) + '. Review running swarms before spawning more.';
+      budgetBanner.style.display = 'block';
+    } else {
+      budgetBanner.style.display = 'none';
+    }
+    const btn = document.getElementById('autospawn-btn');
+    btn.textContent = 'Auto-spawn: ' + (s.auto_spawn ? 'ON' : 'OFF');
+    btn.className = 'navbtn' + (s.auto_spawn ? ' primary' : '');
+    render(s);
+  } catch (e) {
+    document.getElementById('h-lastupdate').textContent = 'offline';
+  }
+}
+
+function render(s) {
+  const body = document.getElementById('ch-body');
+  const names = s.known_challenges || [];
+  if (!names.length) { body.innerHTML = '<tr><td colspan="3"><div class="empty">No challenges yet.</div></td></tr>'; return; }
+  let html = '';
+  for (const name of names) {
+    const solved = (s.solved || []).includes(name);
+    const swarm = (s.swarms || {})[name];
+    const running = !!(swarm && !swarm.cancelled);
+    const act = (s.activity || {})[name] || { bins: [], active: false };
+    const badge = solved ? '<span class="badge b-solved">solved</span>'
+                 : (running ? '<span class="badge b-running">running</span>'
+                            : '<span class="badge b-unsolved">unsolved</span>');
+    const dname = esc(name);
+    const reportedFlag = ((s.results && s.results[name] && s.results[name].flag) || (swarm && swarm.winner) || '');
+
+    let actions = '';
+    if (running) {
+      const firstModel = esc(Object.keys(swarm.agents || {})[0] || '');
+      const persOn = ((s.persist || []).indexOf(name) >= 0);
+      const att = (s.attempts || {})[name] || 0;
+      const persTitle = persOn
+        ? 'Auto-retry until flag found — attempt #' + att + '. Click to stop.'
+        : 'Keep spawning attempts until the flag is found';
+      const persBtn = '<button class="btn ' + (persOn ? 'primary' : '') + '" data-act="persist" data-name="' + dname +
+        '" title="' + esc(persTitle) + '">' + (persOn ? '⏳ flag ON (' + att + ')' : '⏳ flag') + '</button>';
+      actions = '<div class="rowbtns">' +
+        '<button class="btn" data-act="trace" data-name="' + dname + '" data-model="' + firstModel + '">Trace</button>' +
+        persBtn +
+        '<button class="btn warn" data-act="broadcast" data-name="' + dname + '">Broadcast</button>' +
+        '<button class="btn" data-act="bump" data-name="' + dname + '">Bump</button>' +
+        '<button class="btn danger" data-act="kill" data-name="' + dname + '">Kill</button></div>';
+    } else if (!solved) {
+      const persOn = ((s.persist || []).indexOf(name) >= 0);
+      const att = (s.attempts || {})[name] || 0;
+      actions = '<div class="rowbtns">' +
+        '<button class="btn primary" data-act="spawn" data-name="' + dname + '">Spawn swarm</button>' +
+        '<button class="btn ' + (persOn ? 'primary' : '') + '" data-act="persist" data-name="' + dname +
+          '" title="Keep spawning attempts until the flag is found">' + (persOn ? '⏳ flag ON (' + att + ')' : '⏳ flag') + '</button>' +
+        '<button class="btn" data-act="log" data-name="' + dname + '">Log</button></div>';
+    } else {
+      // Solved rows: offer "flag ผิด" when a flag was reported (manual/no-CTFd
+      // challenges are judged by the operator, so a wrong guess must be retried).
+      actions = '<div class="rowbtns"><button class="btn" data-act="log" data-name="' + dname + '">Log</button>' +
+        (reportedFlag ? '<button class="btn warn" data-act="wrongflag" data-name="' + dname + '" title="Mark this flag as WRONG — stop, then retry reading the previous log">❌ flag ผิด</button>' : '') +
+        '</div>';
+    }
+
+    // Show the confirmed flag under the challenge name so a solved flag is always visible.
+    const flagHtml = reportedFlag
+      ? '<div class="flag">' + esc(reportedFlag) +
+        '<button class="copy-btn" data-act="copyflag" data-flag="' + esc(reportedFlag) +
+        '" title="Copy flag">⧉</button></div>'
+      : '';
+
+    const spark = act.bins && act.bins.length
+      ? '<div class="ch-spark">' + sparkline(act.bins, act.active) +
+        '<span style="color:var(--muted);font-size:10px">' + (act.active ? 'active' : 'idle') + '</span></div>' : '';
+    html += '<tr class="' + (solved ? 'solved' : '') + '">' +
+      '<td><div class="ch-name"><span class="act-dot ' + (act.active ? 'active' : 'idle') + '"></span>' + esc(name) + '</div>' +
+      '<div class="ch-meta">' + esc(s.challenge_meta[name] || '') + '</div>' + flagHtml + spark + '</td>' +
+      '<td>' + badge + '</td>' +
+      '<td>' + actions + '</td></tr>';
+  }
+  body.innerHTML = html;
+}
+
+// Event delegation — avoids inline-onclick quoting bugs (apostrophes etc.)
+document.getElementById('ch-body').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const name = btn.dataset.name;
+  const act = btn.dataset.act;
+  if (act === 'spawn') openSpawn(name);
+  else if (act === 'kill') killSwarm(name);
+  else if (act === 'broadcast') broadcast(name);
+  else if (act === 'bump') bumpPick(name);
+  else if (act === 'trace') viewTrace(name, btn.dataset.model || '');
+  else if (act === 'persist') togglePersist(name);
+  else if (act === 'wrongflag') wrongFlag(name);
+  else if (act === 'copyflag') copyFlag(btn.dataset.flag || '');
+  else if (act === 'log') challengeLogs(name);
+});
+
+function copyFlag(flag) {
+  if (!flag) { toast('no flag to copy'); return; }
+  const done = () => toast('Flag copied ✓');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(flag).then(done).catch(() => copyFlagFallback(flag, done));
+  } else {
+    copyFlagFallback(flag, done);
+  }
+}
+
+function copyFlagFallback(flag, done) {
+  const ta = document.createElement('textarea');
+  ta.value = flag;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('copy failed: ' + e); }
+  document.body.removeChild(ta);
+}
+
+// ---- Spawn with model selection ----
+let spawnName = '';
+function parseSpec(spec) {
+  const parts = spec.split('/');
+  if (parts[0] === 'custom') return { provider: parts[1] || 'custom', model: parts.slice(2).join('/') };
+  return { provider: parts[0] || '?', model: parts.slice(1).join('/') };
+}
+
+function openSpawn(name) {
+  spawnName = name;
+  document.getElementById('spawn-title').textContent = 'Spawn swarm — ' + name;
+  const models = (state && state.ready_models) || [];
+  const box = document.getElementById('spawn-models');
+  const roleChk = document.getElementById('sp-role');
+  roleChk.checked = false;
+  document.getElementById('sp-role-fields').style.display = 'none';
+  document.getElementById('sp-count').value = '0';
+  document.getElementById('sp-instr').value = '';
+  if (!models.length) {
+    box.innerHTML = '<div class="empty" style="padding:10px">No models ready — check provider API keys.</div>';
+    document.getElementById('spawn-count').textContent = '';
+    return;
+  }
+  const groups = {};
+  for (const m of models) {
+    const { provider, model } = parseSpec(m);
+    (groups[provider] = groups[provider] || []).push({ spec: m, model });
+  }
+  let html = '';
+  for (const [provider, items] of Object.entries(groups)) {
+    html += '<div class="spawn-group"><div class="spawn-group-name">' + esc(provider) + '</div>';
+    for (const it of items) {
+      html += '<label class="spawn-item">' +
+        '<input type="checkbox" class="spawn-chk" value="' + esc(it.spec) + '" checked>' +
+        '<span class="spawn-model">' + esc(it.model) + '</span>' +
+        '<span class="spawn-spec">' + esc(it.spec) + '</span></label>';
+    }
+    html += '</div>';
+  }
+  box.innerHTML = html;
+  updateSpawnCount();
+  document.getElementById('spawn-modal').style.display = 'flex';
+  document.getElementById('spawn-msg').textContent = '';
+}
+
+function selectAllSpawn(on) {
+  document.querySelectorAll('.spawn-chk').forEach(b => { b.checked = on; });
+  updateSpawnCount();
+}
+
+function closeSpawn() { document.getElementById('spawn-modal').style.display = 'none'; }
+
+function updateSpawnCount() {
+  const boxes = document.querySelectorAll('.spawn-chk');
+  let count = 0;
+  boxes.forEach(b => { if (b.checked) count++; });
+  document.getElementById('spawn-count').textContent = count + ' selected / max 5';
+}
+
+document.getElementById('spawn-models').addEventListener('change', updateSpawnCount);
+
+function updateRoleFields() {
+  const on = document.getElementById('sp-role').checked;
+  document.getElementById('sp-role-fields').style.display = on ? 'block' : 'none';
+  if (on) updateSpawnCount();
+}
+
+async function doSpawn() {
+  const selected = [];
+  document.querySelectorAll('.spawn-chk').forEach(b => { if (b.checked) selected.push(b.value); });
+  if (!selected.length) { document.getElementById('spawn-msg').textContent = 'select at least 1 model'; return; }
+  if (selected.length > 5) { document.getElementById('spawn-msg').textContent = 'max 5 models'; return; }
+  busy('btn-spawn', true);
+  try {
+    const body = { models: selected };
+    if (document.getElementById('sp-role').checked) {
+      body.role_mode = true;
+      body.count = parseInt(document.getElementById('sp-count').value || '0', 10);
+      body.instruction = document.getElementById('sp-instr').value.trim();
+    }
+    const r = await api('/api/challenges/' + encodeURIComponent(spawnName) + '/spawn', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    document.getElementById('spawn-msg').textContent = r.message || r.error || 'spawn requested';
+    closeSpawn();
+    refresh();
+  } finally {
+    busy('btn-spawn', false, 'Spawn');
+  }
+}
+
+async function spawn(name) {
+  const r = await api('/api/challenges/' + encodeURIComponent(name) + '/spawn', { method: 'POST' });
+  toast(r.message || 'spawn requested');
+  refresh();
+}
+
+async function killSwarm(name) {
+  if (!confirm('Kill swarm for ' + name + '?')) return;
+  const r = await api('/api/swarms/' + encodeURIComponent(name) + '/kill', { method: 'POST' });
+  toast(r.message || 'killed');
+  refresh();
+}
+
+async function broadcast(name) {
+  const msg = prompt('Broadcast to all solvers on ' + name + ':', '');
+  if (msg === null) return;
+  const r = await api('/api/swarms/' + encodeURIComponent(name) + '/broadcast', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: msg })
+  });
+  toast(r.message || 'sent');
+}
+
+function bumpPick(name) {
+  if (!state || !state.swarms[name]) return;
+  const specs = Object.keys(state.swarms[name].agents || {});
+  const spec = prompt('Model to bump (' + specs.join(', ') + '):', specs[0] || '');
+  if (!spec) return;
+  const insights = prompt('Insights / guidance to send:', '');
+  if (insights === null) return;
+  bump(name, spec, insights);
+}
+
+async function bump(name, spec, insights) {
+  const r = await api('/api/swarms/' + encodeURIComponent(name) + '/bump', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: spec, insights: insights })
+  });
+  toast(r.message || 'bumped');
+}
+
+let traceName = '';
+let traceIsLog = false;
+let traceTimer = null;
+
+function viewTrace(name, model) {
+  const swarm = state && state.swarms[name];
+  const specs = Object.keys((swarm && swarm.agents) || {});
+  if (!specs.length) {
+    // Swarm gone (finished/retired) — fall back to the latest trace file.
+    challengeLogs(name);
+    return;
+  }
+  traceName = name;
+  traceIsLog = false;
+  clearInterval(traceTimer);
+  document.getElementById('trace').textContent = 'Loading…';
+  const sel = document.getElementById('m-model');
+  sel.innerHTML = specs.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
+  if (model && specs.indexOf(model) >= 0) sel.value = model;
+  document.getElementById('m-title').textContent = 'Trace — ' + name;
+  document.getElementById('trace-modal').style.display = 'flex';
+  loadTrace();
+  traceTimer = setInterval(loadTrace, 2000);  // live refresh
+}
+
+function closeModal() {
+  clearInterval(traceTimer);
+  document.getElementById('trace-modal').style.display = 'none';
+}
+
+async function loadTrace() {
+  const model = document.getElementById('m-model').value;
+  if (!traceName || !model) return;
+  const q = new URLSearchParams({ model: model, last_n: '80' });
+  try {
+    const r = await api('/api/swarms/' + encodeURIComponent(traceName) + '/trace?' + q.toString());
+    document.getElementById('trace').textContent = r.trace || r.error || '(no trace)';
+  } catch (e) {
+    document.getElementById('trace').textContent = 'Error loading trace: ' + e;
+  }
+}
+
+async function togglePersist(name) {
+  if (!name) return;
+  const on = !((state && state.persist || []).indexOf(name) >= 0);
+  try {
+    const r = await api('/api/challenges/' + encodeURIComponent(name) + '/persist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on })
+    });
+    toast(r.message || 'toggled');
+    refresh();
+  } catch (e) {
+    toast('toggle failed: ' + e);
+  }
+}
+
+async function wrongFlag(name) {
+  if (!name) return;
+  if (!confirm('Mark the reported flag for "' + name + '" as WRONG and retry (reading the previous log)?')) return;
+  try {
+    const r = await api('/api/challenges/' + encodeURIComponent(name) + '/wrong-flag', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    toast(r.message || 'marked wrong');
+    refresh();
+  } catch (e) {
+    toast('wrong-flag failed: ' + e);
+  }
+}
+
+// ---- Logs browser ----
+async function openLogs() {
+  document.getElementById('logs-modal').style.display = 'flex';
+  const list = document.getElementById('log-list');
+  list.innerHTML = '<div class="hint">Loading…</div>';
+  const r = await api('/api/logs');
+  if (!r.logs || !r.logs.length) { list.innerHTML = '<div class="empty">No trace logs yet.</div>'; return; }
+  let html = '';
+  for (const f of r.logs) {
+    const t = new Date(f.mtime * 1000).toLocaleTimeString();
+    html += '<div class="prov-card" style="cursor:pointer" data-log="' + esc(f.name) + '">' +
+      '<div class="row1"><b>' + esc(f.name) + '</b>' +
+      '<span style="flex:1;color:var(--muted);font-size:11px;font-family:var(--mono)">' + t + ' · ' + (f.size/1024).toFixed(1) + ' KB</span></div></div>';
+  }
+  list.innerHTML = html;
+}
+
+document.getElementById('log-list').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-log]');
+  if (el) viewLog(el.dataset.log);
+});
+
+function closeLogs() { document.getElementById('logs-modal').style.display = 'none'; }
+
+async function viewLog(name) {
+  clearInterval(traceTimer);
+  traceIsLog = true;
+  const sel = document.getElementById('m-model');
+  sel.innerHTML = '<option value="__log__">log file</option>';
+  document.getElementById('m-title').textContent = 'Log — ' + name;
+  document.getElementById('trace-modal').style.display = 'flex';
+  const q = new URLSearchParams({ path: name });
+  const r = await api('/api/logs/read?' + q.toString());
+  document.getElementById('trace').textContent = r.trace || r.error || '(empty)';
+}
+
+async function challengeLogs(name) {
+  const r = await api('/api/logs/for/' + encodeURIComponent(name));
+  if (r.file) viewLog(r.file);
+  else toast('No trace log for this challenge yet');
+}
+
+document.getElementById('trace-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('trace-modal')) closeModal();
+});
+
+// ---- Settings panel ----
+async function toggleAutoSpawn() {
+  const next = !(state && state.auto_spawn);
+  const r = await api('/api/autospawn', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: next })
+  });
+  toast('Auto-spawn ' + (r.auto_spawn ? 'enabled' : 'disabled') + ' — new challenges will ' + (r.auto_spawn ? '' : 'NOT ') + 'spawn automatically');
+  refresh();
+}
+
+function openSetup() {
+  document.getElementById('setup-modal').style.display = 'flex';
+  document.getElementById('test-results').style.display = 'none';
+  api('/api/config').then(c => {
+    document.getElementById('f-ctfd-url').value = c.ctfd_url || '';
+    document.getElementById('f-ctfd-token').value = c.ctfd_token || '';
+    document.getElementById('f-ctfd-session').value = c.ctfd_session_cookie || '';
+  });
+  document.getElementById('setup-msg').textContent = '';
+}
+
+function closeSetup() { document.getElementById('setup-modal').style.display = 'none'; }
+
+async function testConfig() {
+  const res = document.getElementById('test-results');
+  res.style.display = 'block';
+  res.innerHTML = '<div class="hint">Testing…</div>';
+  busy('btn-test', true);
+  try {
+    const body = {
+      ctfd_url: document.getElementById('f-ctfd-url').value.trim(),
+      ctfd_token: document.getElementById('f-ctfd-token').value.trim(),
+      ctfd_session_cookie: document.getElementById('f-ctfd-session').value.trim(),
+    };
+    const r = await api('/api/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const results = r.results || {};
+    let html = '';
+    for (const [name, t] of Object.entries(results)) {
+      const cls = t.ok ? 'ok' : 'fail';
+      const label = t.ok ? 'OK' : 'FAIL';
+      html += '<div class="test-item"><span class="' + cls + '">' + label + '</span> <b>' + esc(name) + '</b>' +
+              '<span class="url">' + esc(t.base_url || '') + '</span>' +
+              '<span class="det">' + esc(t.detail || '') + '</span></div>';
+    }
+    res.innerHTML = html;
+  } finally {
+    busy('btn-test', false, 'Test');
+  }
+}
+
+async function saveConfig() {
+  busy('btn-save', true);
+  try {
+    const body = {
+      ctfd_url: document.getElementById('f-ctfd-url').value.trim(),
+      ctfd_token: document.getElementById('f-ctfd-token').value.trim(),
+      ctfd_session_cookie: document.getElementById('f-ctfd-session').value.trim(),
+    };
+    const r = await api('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    document.getElementById('setup-msg').textContent = (r.note || r.error || 'saved');
+    refresh();
+  } finally {
+    busy('btn-save', false, 'Save');
+  }
+}
+
+// ---- Providers panel ----
+function openProviders() {
+  document.getElementById('providers-modal').style.display = 'flex';
+  renderProviders();
+  document.getElementById('prov-msg').textContent = '';
+}
+
+function closeProviders() { document.getElementById('providers-modal').style.display = 'none'; }
+
+async function renderProviders() {
+  const r = await api('/api/providers');
+  const sel = document.getElementById('p-format');
+  if (!sel.options.length) {
+    sel.innerHTML = (r.formats || []).map(f => '<option value="' + esc(f.value) + '">' + esc(f.label) + '</option>').join('');
+  }
+  const list = document.getElementById('prov-list');
+  if (!r.providers.length) { list.innerHTML = '<div class="empty" style="padding:12px">No providers yet — add one above.</div>'; return; }
+  const fmtLabel = {};
+  (r.formats || []).forEach(f => fmtLabel[f.value] = f.label);
+  let html = '';
+  for (const p of r.providers) {
+    const safeName = String(p.name).replace(/[^a-zA-Z0-9_-]/g, '_');
+    html += '<div class="prov-card">' +
+      '<div class="row1"><b>' + esc(p.name) + '</b> <span class="badge b-unsolved">' + esc(fmtLabel[p.api_format] || p.api_format || p.kind) + '</span>' +
+      '<span class="base">' + esc(p.base_url || '') + '</span>' +
+      '<button class="btn" data-pact="test" data-pname="' + esc(p.name) + '">Test AI</button>' +
+      '<button class="btn" data-pact="edit" data-pname="' + esc(p.name) + '" data-pfmt="' + esc(p.api_format || '') + '" data-pbase="' + esc(p.base_url || '') + '" data-pmodels="' + esc((p.models || []).join('\n')) + '">Edit</button>' +
+      '<button class="btn danger" data-pact="del" data-pname="' + esc(p.name) + '">Delete</button></div>' +
+      '<div class="row2">key: ' + esc(p.api_key || '(not set)') +
+      ' &nbsp; models: <span style="font-family:var(--mono)">' + esc((p.models || []).join(', ')) + '</span></div>' +
+      '<div id="ptest-' + safeName + '" style="font-size:11px;margin-top:5px;white-space:pre-wrap"></div></div>';
+  }
+  list.innerHTML = html;
+}
+
+document.getElementById('prov-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-pact]');
+  if (!btn) return;
+  if (btn.dataset.pact === 'del') deleteProvider(btn.dataset.pname);
+  else if (btn.dataset.pact === 'edit') editProvider(btn.dataset.pname, btn.dataset.pfmt, btn.dataset.pbase, btn.dataset.pmodels || '');
+  else if (btn.dataset.pact === 'test') testProvider(btn.dataset.pname);
+});
+
+function editProvider(name, fmt, base, modelsStr) {
+  document.getElementById('p-name').value = name || '';
+  document.getElementById('p-base').value = base || '';
+  document.getElementById('p-models').value = modelsStr || '';
+  const sel = document.getElementById('p-format');
+  if (fmt) sel.value = fmt;
+  document.getElementById('p-key').value = '';
+  document.getElementById('p-key').placeholder = 'sk-... (leave empty to keep current)';
+  document.getElementById('p-add-btn').textContent = 'Update provider';
+  document.getElementById('prov-msg').textContent = 'Editing "' + (name || '') + '" — change fields then click Update.';
+  document.getElementById('p-key').focus();
+}
+
+async function testProvider(name) {
+  const el = document.getElementById('ptest-' + String(name).replace(/[^a-zA-Z0-9_-]/g, '_'));
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--muted)">Sending test message to AI…</span>';
+  try {
+    const r = await api('/api/providers/' + encodeURIComponent(name) + '/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (r.ok && r.result && r.result.ok) {
+      const res = r.result;
+      el.innerHTML = '<span style="color:var(--green)">OK</span> — ' + esc(res.model || '') +
+        ' replied via <span style="font-family:var(--mono)">' + esc(res.endpoint || '') + '</span>' +
+        (res.reply ? '\nreply: ' + esc(trunc(res.reply, 80)) : '') +
+        '\n<span style="color:var(--muted)">' + esc(res.detail || '') + '</span>';
+    } else {
+      const res = r.result || {};
+      el.innerHTML = '<span style="color:var(--red)">FAIL</span> — ' + esc(res.detail || r.error || 'test failed') +
+        (res.endpoint ? '\nendpoint tried: <span style="font-family:var(--mono)">' + esc(res.endpoint) + '</span>' : '');
+    }
+  } catch (err) {
+    el.innerHTML = '<span style="color:var(--red)">FAIL</span> — ' + esc(String(err));
+  }
+}
+
+async function addProvider() {
+  const name = document.getElementById('p-name').value.trim();
+  if (!name) { document.getElementById('prov-msg').textContent = 'name required'; return; }
+  const models = document.getElementById('p-models').value.split('\n').map(s => s.trim()).filter(Boolean);
+  busy('p-add-btn', true);
+  try {
+    const body = {
+      name: name,
+      api_format: document.getElementById('p-format').value,
+      base_url: document.getElementById('p-base').value.trim(),
+      api_key: document.getElementById('p-key').value.trim(),
+      models: models,
+    };
+    const r = await api('/api/providers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    document.getElementById('prov-msg').textContent = r.note || r.error || '';
+    document.getElementById('p-name').value = '';
+    document.getElementById('p-base').value = '';
+    document.getElementById('p-key').value = '';
+    document.getElementById('p-models').value = '';
+    document.getElementById('p-add-btn').textContent = 'Add provider';
+    renderProviders();
+    refresh();
+  } finally {
+    busy('p-add-btn', false, 'Add provider');
+  }
+}
+
+async function deleteProvider(name) {
+  if (!confirm('Delete provider ' + name + '?')) return;
+  await api('/api/providers/' + encodeURIComponent(name), { method: 'DELETE' });
+  renderProviders();
+  refresh();
+}
+
+// ---- Add challenge (manual, no CTFd) ----
+function openAddChallenge() {
+  document.getElementById('addch-modal').style.display = 'flex';
+  document.getElementById('addch-msg').textContent = '';
+  document.getElementById('ac-files').value = '';
+}
+
+function closeAddChallenge() {
+  document.getElementById('addch-modal').style.display = 'none';
+  document.getElementById('ac-files').value = '';
+}
+
+async function addChallenge() {
+  const name = document.getElementById('ac-name').value.trim();
+  if (!name) { document.getElementById('addch-msg').textContent = 'name required'; return; }
+  busy('btn-addch', true);
+  try {
+    const fields = {
+      name: name,
+      category: document.getElementById('ac-category').value.trim(),
+      value: parseInt(document.getElementById('ac-value').value || '0', 10),
+      connection_info: document.getElementById('ac-conn').value.trim(),
+      description: document.getElementById('ac-desc').value.trim(),
+    };
+    const fileInput = document.getElementById('ac-files');
+    const selectedFiles = fileInput.files;
+    let opts;
+    if (selectedFiles && selectedFiles.length) {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(fields)) form.append(k, v);
+      for (const f of selectedFiles) form.append('files', f);
+      opts = { method: 'POST', body: form };  // browser sets multipart Content-Type + boundary
+    } else {
+      opts = {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields)
+      };
+    }
+    const r = await api('/api/challenges/manual', opts);
+    document.getElementById('addch-msg').textContent = r.message || r.error || 'added';
+    closeAddChallenge();
+    toast(r.message || r.error || 'added');
+    refresh();
+  } finally {
+    busy('btn-addch', false, 'Add challenge');
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

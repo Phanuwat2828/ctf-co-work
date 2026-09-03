@@ -30,7 +30,16 @@ from backend.models import model_id_from_spec
 from backend.output_types import solver_output_json_schema
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
-from backend.solver_base import CANCELLED, ERROR, FLAG_FOUND, GAVE_UP, QUOTA_ERROR, SolverResult
+from backend.solver_base import (
+    CANCELLED,
+    ERROR,
+    FLAG_FOUND,
+    GAVE_UP,
+    QUOTA_ERROR,
+    SolverResult,
+    role_display_label,
+    role_system_section,
+)
 from backend.tracing import SolverTracer
 
 logger = logging.getLogger(__name__)
@@ -52,9 +61,12 @@ class ClaudeSolver:
         submit_fn=None,
         message_bus=None,
         notify_coordinator=None,
+        role: str = "",
     ) -> None:
         self.model_spec = model_spec
         self.model_id = model_id_from_spec(model_spec)
+        self.role = role
+        self._label = role_display_label(self.model_id, role)
         self.challenge_dir = challenge_dir
         self.meta = meta
         self.ctfd = ctfd
@@ -72,8 +84,8 @@ class ClaudeSolver:
             memory_limit=getattr(settings, "container_memory_limit", "4g"),
         )
         self.loop_detector = LoopDetector()
-        self.tracer = SolverTracer(meta.name, self.model_id)
-        self.agent_name = f"{meta.name}/{self.model_id}"
+        self.tracer = SolverTracer(meta.name, self._label)
+        self.agent_name = f"{meta.name}/{self._label}"
 
         self._client: ClaudeSDKClient | None = None
         self._session_id: str | None = None
@@ -106,6 +118,8 @@ class ClaudeSolver:
             self.meta, distfile_names, container_arch=container_arch,
             has_named_tools=False,
         )
+        if self.role:
+            system_prompt += role_system_section(self.role)
 
         # PreToolUse hook: rewrite Bash commands to run in the sandbox container.
         # Block Read/Write/Edit — model should use bash for file access.

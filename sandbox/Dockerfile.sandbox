@@ -1,139 +1,665 @@
-# CTF challenge solver sandbox image.
-# Build once: docker build -f Dockerfile.sandbox -t ctf-sandbox .
+FROM kalilinux/kali-rolling:latest
 
-FROM ubuntu:22.04
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TOOLSET=ctf
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TERM=xterm
 
-# ── System packages ───────────────────────────────────────────────────────────
-RUN apt-get update && apt-get install -y \
-    # Networking
-    netcat-openbsd curl wget nmap \
-    # Binary analysis
-    binutils file xxd bsdmainutils binwalk \
-    gdb ltrace strace \
-    # Forensics / steg / image analysis
-    exiftool steghide \
-    pngcheck imagemagick \
-    # Filesystem forensics
-    xfsprogs sleuthkit foremost dcfldd testdisk \
-    # Audio / media
-    ffmpeg sox \
-    # OCR
-    tesseract-ocr tesseract-ocr-eng \
-    # Crypto / encoding
-    openssl libssl-dev \
-    # Build tools
-    gcc g++ make cmake \
-    # Python (system base)
-    python3 python3-pip python3-dev \
-    # Ruby (for zsteg)
-    ruby ruby-dev \
-    # Java (for Ghidra headless if mounted)
-    default-jre-headless \
-    # Misc
-    git jq zip unzip ca-certificates ncurses-term \
-    # Math libs (required by flatter, cado-nfs, fpylll)
-    libgmp-dev libmpfr-dev libfplll-dev libeigen3-dev \
-    # z3 solver system lib
+ENV TERM=xterm-256color \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin \
+    KERAS_BACKEND=torch
+
+
+# ============================================================
+# BASE + BUILD DEPENDENCIES
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    wget \
+    git \
+    gnupg \
+    sudo \
+    locales \
+    bash \
+    zsh \
+    tmux \
+    vim \
+    nano \
+    less \
+    man-db \
+    jq \
+    tree \
+    file \
+    xxd \
+    bsdextrautils \
+    unzip \
+    zip \
+    p7zip-full \
+    tar \
+    gzip \
+    bzip2 \
+    xz-utils \
+    rsync \
+    openssh-client \
+    netcat-openbsd \
+    socat \
+    rlwrap \
+    screen \
+    procps \
+    lsof \
+    make \
+    gcc \
+    g++ \
+    build-essential \
+    cmake \
+    pkg-config \
+    nasm \
+    binutils \
+    patchelf \
+    elfutils \
+    python3 \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    pipx \
+    ruby \
+    ruby-dev \
+    golang-go \
+    default-jdk \
+    dnsutils \
+    iproute2 \
+    iputils-ping \
+    traceroute \
+    tcpdump \
+    tshark \
+    openvpn \
+    wireguard-tools \
+    proxychains4 \
+    tor \
+    fzf \
+    ripgrep \
+    fd-find \
+    bat \
+    libssl-dev \
+    libgmp-dev \
+    libmpfr-dev \
+    libfplll-dev \
+    libeigen3-dev \
     libz3-dev \
-    # SageMath (Ubuntu 22.04 ships 9.x, works on aarch64 and amd64)
-    sagemath \
-    # CADO-NFS build deps
-    libhwloc-dev libbz2-dev \
+    libhwloc-dev \
+    libbz2-dev \
+    libmhash-dev \
+    libmcrypt-dev \
+    libjpeg-dev \
+    zlib1g-dev \
+    libtool \
+    libtool-bin \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Podman (nested containers — run challenge Docker images inside sandbox) ───
-# Ubuntu 22.04 needs the kubic repo for podman
-RUN apt-get update && apt-get install -y curl gnupg2 \
-    && . /etc/os-release \
-    && echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" \
-       > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
-    && curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" \
-       | gpg --dearmor -o /etc/apt/trusted.gpg.d/kubic.gpg \
-    && apt-get update && apt-get install -y podman buildah fuse-overlayfs slirp4netns \
+
+# ============================================================
+# KALI CTF METAPACKAGES
+# ============================================================
+RUN apt-get update && \
+    if [ "$TOOLSET" = "everything" ]; then \
+        apt-get install -y kali-linux-everything; \
+    else \
+        apt-get install -y \
+            kali-tools-information-gathering \
+            kali-tools-vulnerability \
+            kali-tools-web \
+            kali-tools-database \
+            kali-tools-passwords \
+            kali-tools-reverse-engineering \
+            kali-tools-exploitation \
+            kali-tools-sniffing-spoofing \
+            kali-tools-post-exploitation \
+            kali-tools-forensics \
+            kali-tools-crypto-stego; \
+    fi && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# BINARY / PWN / REVERSE
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gdb \
+    gdb-multiarch \
+    checksec \
+    strace \
+    ltrace \
+    radare2 \
+    ghidra \
+    apktool \
+    binwalk \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# WEB / NETWORK / ENUMERATION
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nmap \
+    masscan \
+    sqlmap \
+    nikto \
+    gobuster \
+    ffuf \
+    feroxbuster \
+    dirsearch \
+    wfuzz \
+    hydra \
+    bettercap \
+    mitmproxy \
+    metasploit-framework \
+    exploitdb \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# PASSWORD / HASH / WORDLIST
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    john \
+    hashcat \
+    crunch \
+    cewl \
+    wordlists \
+    seclists \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# AD / SMB / DATABASE / PROTOCOLS
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    sqlite3 \
+    redis-tools \
+    postgresql-client \
+    mariadb-client \
+    smbclient \
+    ldap-utils \
+    snmp \
+    onesixtyone \
+    enum4linux \
+    impacket-scripts \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# FORENSICS / STEG
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    steghide \
+    stegseek \
+    pngcheck \
+    libimage-exiftool-perl \
+    imagemagick \
+    foremost \
+    scalpel \
+    sleuthkit \
+    testdisk \
+    xfsprogs \
+    dcfldd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# MEDIA / AUDIO / OCR
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    sox \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# CRYPTO / MATHEMATICS
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# SageMath was removed from Kali repos in 2023. Try apt first, then fall
+# back to conda-forge (official route). If both fail, continue without it —
+# RsaCtfTool / cado-nfs / sympy / gmpy2 / z3 / fpylll / flatter still cover
+# the crypto needs.
+RUN apt-get update \
+    && if apt-get install -y --no-install-recommends sagemath; then \
+           echo "[ctf-agent] SageMath installed via Kali apt"; \
+       else \
+           echo "[ctf-agent] sagemath not in Kali repos; attempting conda-forge..."; \
+           ( curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj -C /usr/local bin/micromamba \
+             && micromamba create -y -p /opt/sage-env -c conda-forge sagemath python=3.12 \
+             && ln -sf /opt/sage-env/bin/sage /usr/local/bin/sage ) \
+             && echo "[ctf-agent] SageMath installed via conda-forge" \
+             || echo "[ctf-agent] SageMath unavailable — continuing without it"; \
+       fi \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# NESTED CONTAINERS
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    podman \
+    podman-compose \
+    buildah \
+    fuse-overlayfs \
+    slirp4netns \
+    uidmap \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# ============================================================
+# RUBY CTF TOOLS
+# ============================================================
+RUN gem install --no-document \
+    zsteg \
+    one_gadget
+
+
+# ============================================================
+# PYTHON CTF ENVIRONMENT
+#
+# Kali ships Python 3.14, which several CTF libs (e.g. pwntools'
+# filebytes dependency) do not support yet. Use a uv-managed
+# Python 3.12 for the venv — the sweet spot for CTF tooling.
+# ============================================================
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+
+ENV PATH="/root/.local/bin:${PATH}"
+
+
+RUN uv python install 3.12 \
+    && uv venv --python 3.12 --seed /opt/ctf-venv
+
+
+ENV PATH="/opt/ctf-venv/bin:${PATH}"
+
+
+RUN python -m pip install --no-cache-dir --upgrade \
+    pip \
+    setuptools \
+    wheel
+
+
+# ============================================================
+# PYTHON - GENERAL / WEB
+# ============================================================
+RUN python -m pip install --no-cache-dir \
+    requests \
+    beautifulsoup4 \
+    lxml \
+    flask \
+    fastapi \
+    uvicorn \
+    ipython \
+    tqdm
+
+
+# ============================================================
+# PYTHON - PWN / REVERSE
+# ============================================================
+RUN python -m pip install --no-cache-dir \
+    pwntools \
+    ropper \
+    ropgadget \
+    angr \
+    capstone \
+    unicorn \
+    pyghidra
+
+
+# keystone-engine builds from source on py3.12 — tolerate failure
+RUN python -m pip install --no-cache-dir keystone-engine \
+    || echo "[ctf-agent] keystone-engine install failed (optional — continuing)"
+
+
+# ============================================================
+# PYTHON - CRYPTO / MATH
+# ============================================================
+RUN python -m pip install --no-cache-dir \
+    pycryptodome \
+    cryptography \
+    sympy \
+    gmpy2 \
+    z3-solver \
+    fpylll
+
+
+# ============================================================
+# PYTHON - FORENSICS / IMAGE / DATA
+# ============================================================
+RUN python -m pip install --no-cache-dir \
+    Pillow \
+    pytesseract \
+    numpy \
+    scipy \
+    volatility3 \
+    PyJWT
+
+
+# ============================================================
+# PYTORCH CPU + KERAS
+# ============================================================
+RUN python -m pip install --no-cache-dir \
+        torch \
+        --index-url https://download.pytorch.org/whl/cpu \
+    && python -m pip install --no-cache-dir keras
+
+
+# ============================================================
+# RSA CTF TOOL
+# ============================================================
+RUN git clone --depth=1 \
+        https://github.com/RsaCtfTool/RsaCtfTool.git \
+        /opt/RsaCtfTool \
+    && python -m pip install --no-cache-dir /opt/RsaCtfTool
+
+
+# Convenience command
+RUN printf '#!/bin/bash\nexec python3 /opt/RsaCtfTool/RsaCtfTool.py "$@"\n' \
+    > /usr/local/bin/RsaCtfTool \
+    && chmod +x /usr/local/bin/RsaCtfTool
+
+
+# ============================================================
+# FLATTER
+# Fast lattice reduction
+# ============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    liblapack-dev \
+    libblas-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    || echo "Podman install failed (non-fatal) — nested containers will not be available"
-
-# ── radare2 ───────────────────────────────────────────────────────────────────
-RUN git clone --depth=1 https://github.com/radareorg/radare2 /tmp/r2 \
-    && cd /tmp/r2 && bash sys/install.sh --install \
-    && ldconfig \
-    && r2 -v \
-    && rm -rf /tmp/r2
-
-# ── flatter (fast lattice reduction — Keegan Ryan's fork) ────────────────────
-RUN git clone --depth=1 https://github.com/keeganryan/flatter /tmp/flatter \
-    && cmake -S /tmp/flatter -B /tmp/flatter/build \
+    && git clone --depth=1 \
+        https://github.com/keeganryan/flatter.git \
+        /tmp/flatter \
+    && cmake \
+        -S /tmp/flatter \
+        -B /tmp/flatter/build \
         -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build /tmp/flatter/build -j$(nproc) \
+    && cmake --build \
+        /tmp/flatter/build \
+        -j"$(nproc)" \
     && cmake --install /tmp/flatter/build \
     && ldconfig \
     && rm -rf /tmp/flatter
 
-# ── uv (fast Python package manager) ─────────────────────────────────────────
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:/root/.local/bin:$PATH"
 
-# ── zsteg ─────────────────────────────────────────────────────────────────────
-RUN gem install zsteg
+# ============================================================
+# CADO-NFS
+# Large Integer Factorization / DLP
+# ============================================================
+RUN git clone --depth=1 \
+        https://gitlab.inria.fr/cado-nfs/cado-nfs.git \
+        /opt/cado-nfs \
+    && cd /opt/cado-nfs \
+    && make -j"$(nproc)"
 
-# ── stegseek (build from source — pre-built .deb is amd64 only) ──────────────
-RUN apt-get update && apt-get install -y libmhash-dev libmcrypt-dev libjpeg-dev zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth=1 https://github.com/RickdeJager/stegseek /tmp/stegseek \
-    && cmake -S /tmp/stegseek -B /tmp/stegseek/build \
-    && cmake --build /tmp/stegseek/build --target install \
-    && rm -rf /tmp/stegseek
 
-# ── Python CTF libraries (system python3) ────────────────────────────────────
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip3 install --no-cache-dir \
-    pwntools \
-    pycryptodome \
-    sympy \
-    gmpy2 \
-    requests \
-    Pillow \
-    z3-solver \
-    pytesseract \
-    scipy \
-    numpy \
-    angr \
-    capstone \
-    unicorn \
-    ropgadget \
-    tqdm \
-    fpylll \
-    flask \
-    volatility3 \
-    PyJWT \
-    pyghidra
+# Create wrapper because CADO build dir depends on hostname
+RUN cat > /usr/local/bin/cado-nfs <<'EOF'
+#!/bin/bash
 
-# ── PyTorch (CPU-only) + Keras ────────────────────────────────────────────────
-RUN pip3 install --no-cache-dir --ignore-installed sympy \
-    torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip3 install --no-cache-dir keras
 
-# ── RsaCtfTool (catch-all automated RSA/factoring attacks) ────────────────────
-RUN git clone --depth=1 https://github.com/RsaCtfTool/RsaCtfTool /opt/RsaCtfTool \
-    && pip3 install --no-cache-dir /opt/RsaCtfTool
+BUILD_PARENT="/opt/cado-nfs/build"
+H="$(hostname)"
 
-# ── CADO-NFS (Number Field Sieve — large integer factoring + DLP) ─────────────
-RUN git clone --depth=1 https://gitlab.inria.fr/cado-nfs/cado-nfs.git /opt/cado-nfs \
-    && cd /opt/cado-nfs && make -j$(nproc)
-RUN printf '#!/bin/bash\n\
-BUILD_PARENT=/opt/cado-nfs/build\n\
-H=$(hostname)\n\
-if [ ! -d "$BUILD_PARENT/$H" ]; then\n\
-  src=$(ls -d "$BUILD_PARENT"/* 2>/dev/null | head -1)\n\
-  [ -n "$src" ] && ln -sf "$src" "$BUILD_PARENT/$H"\n\
-fi\n\
-exec python3 /opt/cado-nfs/cado-nfs.py "$@"\n' > /usr/local/bin/cado-nfs \
-    && chmod +x /usr/local/bin/cado-nfs
 
-# ── Tools reference ──────────────────────────────────────────────────────────
-COPY sandbox/sandbox-tools.txt /tools.txt
+if [ ! -d "$BUILD_PARENT/$H" ]; then
+    src="$(find "$BUILD_PARENT" -mindepth 1 -maxdepth 1 -type d | head -1)"
 
-WORKDIR /challenge
+
+    if [ -n "$src" ]; then
+        ln -sfn "$src" "$BUILD_PARENT/$H"
+    fi
+fi
+
+
+exec python3 /opt/cado-nfs/cado-nfs.py "$@"
+EOF
+
+
+RUN chmod +x /usr/local/bin/cado-nfs
+
+
+# ============================================================
+# ROCKYOU
+# ============================================================
+RUN if [ -f /usr/share/wordlists/rockyou.txt.gz ]; then \
+        gunzip -kf /usr/share/wordlists/rockyou.txt.gz; \
+    fi
+
+
+# ============================================================
+# DIRECTORIES
+# ============================================================
+RUN mkdir -p \
+    /work \
+    /loot \
+    /tools \
+    /challenge/distfiles \
+    /challenge/workspace \
+    /root/.config \
+    /root/.cache
+
+
+# ============================================================
+# CTF TOOLS REFERENCE
+# ============================================================
+RUN cat > /tools.txt <<'EOF'
+CTF SANDBOX TOOLS
+=================
+
+
+NETWORK
+-------
+nmap
+masscan
+nc
+curl
+wget
+tcpdump
+tshark
+socat
+bettercap
+mitmproxy
+
+
+WEB
+---
+ffuf
+feroxbuster
+gobuster
+dirsearch
+wfuzz
+nikto
+sqlmap
+
+
+PWN / REVERSE
+-------------
+gdb
+gdb-multiarch
+checksec
+pwntools
+ROPgadget
+ropper
+radare2
+ghidra
+angr
+objdump
+readelf
+nm
+ltrace
+strace
+apktool
+binwalk
+patchelf
+
+
+FORENSICS
+---------
+file
+strings
+xxd
+hexdump
+binwalk
+exiftool
+foremost
+scalpel
+sleuthkit
+mmls
+fls
+icat
+tsk_recover
+fsstat
+testdisk
+xfs_db
+xfs_repair
+dcfldd
+vol
+volatility3
+
+
+STEG
+----
+steghide
+stegseek
+zsteg
+pngcheck
+
+
+IMAGE / AUDIO
+-------------
+identify
+convert
+montage
+tesseract
+ffmpeg
+sox
+
+
+CRYPTO
+------
+openssl
+sage
+RsaCtfTool
+cado-nfs
+flatter
+
+
+PASSWORDS
+---------
+john
+hashcat
+hydra
+crunch
+cewl
+
+
+PYTHON
+------
+pwntools
+pycryptodome
+sympy
+gmpy2
+z3
+fpylll
+angr
+capstone
+unicorn
+keystone
+Pillow
+pytesseract
+scipy
+numpy
+requests
+flask
+volatility3
+torch
+keras
+PyJWT
+pyghidra
+
+
+CONTAINERS
+----------
+podman
+podman-compose
+buildah
+
+
+WORKSPACE
+---------
+/work
+/loot
+/challenge/workspace
+EOF
+
+
+# ============================================================
+# SHELL CONFIG
+# ============================================================
+RUN cat >> /root/.zshrc <<'EOF'
+
+
+export TERM=xterm-256color
+export EDITOR=vim
+export KERAS_BACKEND=torch
+
+
+alias ll='ls -lah --color=auto'
+alias la='ls -A --color=auto'
+
+
+alias ..='cd ..'
+alias ...='cd ../..'
+
+
+alias ports='ss -tulpn'
+alias myip='ip addr'
+
+
+alias serve='python3 -m http.server'
+alias tools='cat /tools.txt'
+
+
+alias work='cd /work'
+alias loot='cd /loot'
+
+
+alias pwncheck='python3 -c "from pwn import *; print(\"pwntools OK\")"'
+alias angrcheck='python3 -c "import angr; print(\"angr OK\")"'
+alias cryptocheck='python3 -c "from Crypto.Cipher import AES; print(\"Crypto OK\")"'
+EOF
+
+
+WORKDIR /work
+
+
+SHELL ["/bin/bash", "-c"]
+
+
+CMD ["sleep", "infinity"]

@@ -123,3 +123,11 @@ class CTFdPoller:
         while not self._stop.is_set():
             await asyncio.sleep(self.interval_s)
             await self._poll_once()
+
+    async def reconfigure(self, client: CTFdClient) -> None:
+        """Swap the CTFd client (e.g. after web setup changes the URL/token)
+        and re-seed known challenges/solved so events resume correctly."""
+        self.ctfd = client
+        self._known_challenges = set()
+        self._known_solved = set()
+        await self._seed()

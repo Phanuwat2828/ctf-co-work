@@ -148,6 +148,7 @@ class CodexCoordinator:
         self._turn_error: str | None = None
 
     async def start(self) -> None:
+        await self.stop()
         self._proc = await asyncio.create_subprocess_exec(
             "codex", "app-server",
             stdin=asyncio.subprocess.PIPE,
@@ -328,13 +329,13 @@ async def run_codex_coordinator(
     challenges_root: str = "challenges",
     no_submit: bool = False,
     coordinator_model: str | None = None,
-    msg_port: int = 0,
+    web_port: int = 0,
 ) -> dict[str, Any]:
     """Run the Codex coordinator with the shared event loop."""
     ctfd, cost_tracker, deps = build_deps(
         settings, model_specs, challenges_root, no_submit,
     )
-    deps.msg_port = msg_port
+    deps.msg_port = web_port
 
     resolved_model = coordinator_model or "gpt-5.4"
     coordinator = CodexCoordinator(deps, model=resolved_model)

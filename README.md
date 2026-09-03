@@ -76,6 +76,16 @@ uv run ctf-solve \
   -v
 ```
 
+## Web Dashboard
+
+While the coordinator runs, a web dashboard is available at `http://127.0.0.1:9400` (change with `--web-port`, `0` = auto-pick):
+
+- **Live status** — every challenge (solved/unsolved), each swarm and per-agent findings/status, flags found, and total cost/tokens
+- **Setup on the web** — no need to pre-edit `.env`: start with empty config, open the dashboard, use the **⚙ Setup** panel to add CTFd URL/token and API keys. The app reconfigures the live connection; new solvers pick up keys immediately.
+- **Chat with the coordinator** — type commands like *"spawn a swarm on 'web-1'"* or *"focus on crypto"*; the coordinator LLM acts on them
+- **Direct controls** per challenge — Spawn swarm, Kill, Broadcast hints, Bump a specific model, and view a solver's trace
+- The `ctf-msg` CLI still works against the same port: `uv run ctf-msg "hint: try XOR" --port 9400`
+
 ## Coordinator Backends
 
 ```bash
@@ -118,6 +128,7 @@ Each solver gets an isolated Docker container pre-loaded with CTF tools:
 - **Auto-spawn** — new challenges detected and attacked automatically
 - **Coordinator LLM** — reads solver traces, crafts targeted technical guidance
 - **Cross-solver insights** — findings shared between models via message bus
+- **Web dashboard** — live status of all challenges/agents, chat + direct swarm controls
 - **Docker sandboxes** — isolated containers with full CTF tooling
 - **Operator messaging** — send hints to running solvers mid-competition
 

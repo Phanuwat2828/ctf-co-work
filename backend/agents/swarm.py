@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.agents.solver import Solver
 from backend.cost_tracker import CostTracker
@@ -55,9 +55,14 @@ class ChallengeSwarm:
     model_specs: list[str] = field(default_factory=lambda: list(DEFAULT_MODELS))
     no_submit: bool = False
     coordinator_inbox: asyncio.Queue | None = None
+    # Optional role-split plan (from backend.planner). When set, one solver is
+    # spawned per AgentPlan entry (keyed by agent_key, models may repeat);
+    # when None, the classic one-solver-per-model-spec behavior is used.
+    agent_plan: list[Any] | None = None
 
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     solvers: dict[str, SolverProtocol] = field(default_factory=dict)
+    _tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
     findings: dict[str, str] = field(default_factory=dict)
     winner: SolverResult | None = None
     confirmed_flag: str | None = None
@@ -67,7 +72,13 @@ class ChallengeSwarm:
     _last_submit_time: dict[str, float] = field(default_factory=dict)  # per-model last submit timestamp
     message_bus: ChallengeMessageBus = field(default_factory=ChallengeMessageBus)
 
-    def _create_solver(self, model_spec: str):
+    def _agent_entries(self) -> list[tuple[str, str, str]]:
+        """(agent_key, model_spec, role) for every solver this swarm should run."""
+        if self.agent_plan:
+            return [(p.agent_key, p.model_spec, p.role_prompt) for p in self.agent_plan]
+        return [(spec, spec, "") for spec in self.model_specs]
+
+    def _create_solver(self, model_spec: str, role: str = ""):
         """Create the right solver type based on provider.
 
         - claude-sdk/* → ClaudeSolver (Claude Agent SDK, subscription-first)
@@ -93,6 +104,7 @@ class ChallengeSwarm:
                 submit_fn=_submit_fn,
                 message_bus=self.message_bus,
                 notify_coordinator=_notify,
+                role=role,
             )
 
         if provider == "codex":
@@ -109,9 +121,10 @@ class ChallengeSwarm:
                 submit_fn=_submit_fn,
                 message_bus=self.message_bus,
                 notify_coordinator=_notify,
+                role=role,
             )
 
-        return self._create_pydantic_solver(model_spec)
+        return self._create_pydantic_solver(model_spec, role=role)
 
     def _make_notify_fn(self, model_spec: str):
         """Create a callback that pushes solver messages to the coordinator inbox."""
@@ -122,7 +135,8 @@ class ChallengeSwarm:
                 )
         return _notify
 
-    def _create_pydantic_solver(self, model_spec: str, sandbox=None, owns_sandbox: bool | None = None) -> Solver:
+    def _create_pydantic_solver(self, model_spec: str, sandbox=None, owns_sandbox: bool | None = None,
+                                role: str = "") -> Solver:
         """Create a Pydantic AI solver. Pass sandbox to reuse an existing container (quota fallback)."""
         solver = Solver(
             model_spec=model_spec,
@@ -134,6 +148,7 @@ class ChallengeSwarm:
             cancel_event=self.cancel_event,
             sandbox=sandbox,
             owns_sandbox=owns_sandbox,
+            role=role,
         )
         solver.deps.message_bus = self.message_bus
         solver.deps.model_spec = model_spec
@@ -191,21 +206,23 @@ class ChallengeSwarm:
                 self._last_submit_time[model_spec] = time.monotonic()
             return display, is_confirmed
 
-    async def _run_solver(self, model_spec: str) -> SolverResult | None:
-        solver = self._create_solver(model_spec)
-        self.solvers[model_spec] = solver
+    async def _run_solver(self, agent_key: str, model_spec: str, role: str = "") -> SolverResult | None:
+        solver = self._create_solver(model_spec, role=role)
+        self.solvers[agent_key] = solver
 
         try:
-            result, final_solver = await self._run_solver_loop(solver, model_spec)
+            result, final_solver = await self._run_solver_loop(solver, agent_key, model_spec, role)
             solver = final_solver
             return result
         except Exception as e:
-            logger.error(f"[{self.meta.name}/{model_spec}] Fatal: {e}", exc_info=True)
+            logger.error(f"[{self.meta.name}/{agent_key}] Fatal: {e}", exc_info=True)
             return None
         finally:
             await solver.stop()
 
-    async def _run_solver_loop(self, solver, model_spec: str) -> tuple[SolverResult, SolverProtocol]:
+    async def _run_solver_loop(
+        self, solver, agent_key: str, model_spec: str, role: str
+    ) -> tuple[SolverResult, SolverProtocol]:
         """Inner loop: start → run → bump → run → ..."""
         bump_count = 0
         consecutive_errors = 0
@@ -223,14 +240,14 @@ class ChallengeSwarm:
                     and not (result.step_count == 0 and result.cost_usd == 0)
                     and result.findings_summary
                     and not result.findings_summary.startswith(("Error:", "Turn failed:"))):
-                self.findings[model_spec] = result.findings_summary
-                await self.message_bus.post(model_spec, result.findings_summary[:500])
+                self.findings[agent_key] = result.findings_summary
+                await self.message_bus.post(agent_key, result.findings_summary[:500])
 
             if result.status == FLAG_FOUND:
                 self.cancel_event.set()
                 self.winner = result
                 logger.info(
-                    f"[{self.meta.name}] Flag found by {model_spec}: {result.flag}"
+                    f"[{self.meta.name}] Flag found by {agent_key}: {result.flag}"
                 )
                 return result, solver
 
@@ -242,14 +259,16 @@ class ChallengeSwarm:
                 fallback_spec = _quota_fallback_spec(model_spec)
                 if fallback_spec:
                     logger.warning(
-                        f"[{self.meta.name}/{model_spec}] Quota exhausted — falling back to {fallback_spec}"
+                        f"[{self.meta.name}/{agent_key}] Quota exhausted — falling back to {fallback_spec}"
                     )
                     existing_sandbox = solver.sandbox
                     # Detach sandbox from old solver so stop() doesn't destroy it
                     solver.sandbox = None  # type: ignore[assignment]
                     await solver.stop()
-                    solver = self._create_pydantic_solver(fallback_spec, sandbox=existing_sandbox, owns_sandbox=True)
-                    self.solvers[model_spec] = solver
+                    solver = self._create_pydantic_solver(
+                        fallback_spec, sandbox=existing_sandbox, owns_sandbox=True, role=role
+                    )
+                    self.solvers[agent_key] = solver
                     await solver.start()
                     continue
                 # No fallback available, treat as error
@@ -258,7 +277,7 @@ class ChallengeSwarm:
             if result.status in (GAVE_UP, ERROR):
                 if result.step_count == 0 and result.cost_usd == 0:
                     logger.warning(
-                        f"[{self.meta.name}/{model_spec}] Broken (0 steps, $0) — not bumping"
+                        f"[{self.meta.name}/{agent_key}] Broken (0 steps, $0) — not bumping"
                     )
                     break
 
@@ -267,26 +286,30 @@ class ChallengeSwarm:
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
                         logger.warning(
-                            f"[{self.meta.name}/{model_spec}] {consecutive_errors} consecutive errors — giving up"
+                            f"[{self.meta.name}/{agent_key}] {consecutive_errors} consecutive errors — giving up"
                         )
                         break
                 else:
                     consecutive_errors = 0
 
                 bump_count += 1
-                # Cooldown between bumps — check cancellation during wait
+                # Cooldown between bumps — check cancellation during wait.
+                # Early give-ups (few tool calls) get a much shorter cooldown so
+                # the solver keeps working instead of idling.
+                steps = result.step_count or 0
+                cooldown = 5 if steps < 10 else min(bump_count * 30, 300)
                 try:
                     await asyncio.wait_for(
                         self.cancel_event.wait(),
-                        timeout=min(bump_count * 30, 300),
+                        timeout=cooldown,
                     )
                     break  # cancelled during cooldown
                 except TimeoutError:
                     pass  # cooldown elapsed, proceed with bump
-                insights = self._gather_sibling_insights(model_spec)
+                insights = self._gather_sibling_insights(agent_key)
                 solver.bump(insights)
                 logger.info(
-                    f"[{self.meta.name}/{model_spec}] Bumped ({bump_count}), resuming"
+                    f"[{self.meta.name}/{agent_key}] Bumped ({bump_count}), resuming"
                 )
                 continue
 
@@ -295,9 +318,10 @@ class ChallengeSwarm:
     async def run(self) -> SolverResult | None:
         """Run all solvers in parallel. Returns the winner's result or None."""
         tasks = [
-            asyncio.create_task(self._run_solver(spec), name=f"solver-{spec}")
-            for spec in self.model_specs
+            asyncio.create_task(self._run_solver(key, spec, role), name=f"solver-{key}")
+            for key, spec, role in self._agent_entries()
         ]
+        self._tasks = tasks
 
         try:
             while tasks:
@@ -331,6 +355,21 @@ class ChallengeSwarm:
         """Cancel all agents for this challenge."""
         self.cancel_event.set()
 
+    async def force_stop(self) -> None:
+        """Cancel solver tasks and delete sandbox containers immediately."""
+        self.cancel_event.set()
+        for t in self._tasks:
+            if not t.done():
+                t.cancel()
+        for solver in list(self.solvers.values()):
+            try:
+                await solver.stop()
+            except Exception:
+                pass
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks = []
+
     def get_status(self) -> dict:
         """Get per-agent progress and findings."""
         return {
@@ -338,11 +377,11 @@ class ChallengeSwarm:
             "cancelled": self.cancel_event.is_set(),
             "winner": self.winner.flag if self.winner else None,
             "agents": {
-                spec: {
-                    "findings": self.findings.get(spec, ""),
-                    "status": "running" if spec in self.solvers and not self.cancel_event.is_set()
-                             else ("won" if self.winner and self.winner.flag else "finished"),
+                agent_key: {
+                    "findings": self.findings.get(agent_key, ""),
+                    "status": "running" if agent_key in self.solvers and not self.cancel_event.is_set()
+                              else ("won" if self.winner and self.winner.flag else "finished"),
                 }
-                for spec in self.model_specs
+                for agent_key, _, _ in self._agent_entries()
             },
         }

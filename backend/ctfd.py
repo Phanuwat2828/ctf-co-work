@@ -27,6 +27,7 @@ class CTFdClient:
     token: str = ""
     username: str = "admin"
     password: str = "admin"
+    session_cookie: str = ""
 
     _client: httpx.AsyncClient | None = field(default=None, repr=False)
     _csrf_token: str = ""
@@ -37,17 +38,20 @@ class CTFdClient:
         if self._client is None:
             # verify=False: CTFd instances often use self-signed certs or HTTP.
             # This is a CTF tool, not production infrastructure.
+            headers = {"User-Agent": USER_AGENT}
+            if self.session_cookie:
+                headers["Cookie"] = f"session={self.session_cookie}"
             self._client = httpx.AsyncClient(
                 base_url=self.base_url.rstrip("/"),
                 follow_redirects=False,
                 verify=False,
                 timeout=30.0,
-                headers={"User-Agent": USER_AGENT},
+                headers=headers,
             )
         return self._client
 
     async def _ensure_logged_in(self) -> None:
-        if self._logged_in or self.token:
+        if self._logged_in or self.token or self.session_cookie:
             return
         client = await self._ensure_client()
 
@@ -88,7 +92,9 @@ class CTFdClient:
 
     def _base_headers(self) -> dict[str, str]:
         h: dict[str, str] = {"Content-Type": "application/json"}
-        if self.token:
+        # Session cookie auth takes precedence over an API token — a stale
+        # token would otherwise be rejected by CTFd even when the cookie is valid.
+        if self.token and not self.session_cookie:
             h["Authorization"] = f"Token {self.token}"
         return h
 
@@ -102,8 +108,9 @@ class CTFdClient:
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
         await self._ensure_logged_in()
         client = await self._ensure_client()
+        using_token = bool(self.token) and not self.session_cookie
         headers = self._base_headers()
-        if not self.token:
+        if not using_token:
             headers["CSRF-Token"] = await self._get_csrf()
         resp = await client.post(
             f"/api/v1{path}",
@@ -111,7 +118,7 @@ class CTFdClient:
             headers=headers,
         )
         # Retry once on 403 — CSRF token may have gone stale
-        if resp.status_code == 403 and not self.token:
+        if resp.status_code == 403 and not using_token:
             self._csrf_token = ""
             headers["CSRF-Token"] = await self._get_csrf()
             resp = await client.post(
@@ -273,3 +280,28 @@ class CTFdClient:
     async def close(self) -> None:
         if self._client:
             await self._client.aclose()
+
+    def reconfigure(
+        self,
+        base_url: str | None = None,
+        token: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        session_cookie: str | None = None,
+    ) -> None:
+        """Update connection settings and reset state so the next request
+        uses the new credentials. Used by the web setup panel."""
+        if base_url is not None:
+            self.base_url = base_url.rstrip("/")
+        if token is not None:
+            self.token = token
+        if username is not None:
+            self.username = username
+        if password is not None:
+            self.password = password
+        if session_cookie is not None:
+            self.session_cookie = session_cookie
+        self._client = None
+        self._csrf_token = ""
+        self._logged_in = False
+        self._challenge_ids = {}

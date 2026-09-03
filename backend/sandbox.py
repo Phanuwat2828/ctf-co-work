@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import shlex
 import tarfile
 import tempfile
@@ -122,6 +123,10 @@ class DockerSandbox:
                 binds.append(f"{distfiles}:/challenge/distfiles:ro")
             if Path(meta_yml).exists():
                 binds.append(f"{meta_yml}:/challenge/metadata.yml:ro")
+            # On-demand CTF skill library (set by cli when agent_skills/ exists).
+            skills_dir = os.environ.get("CTF_SKILLS_DIR", "")
+            if skills_dir and Path(skills_dir, "INDEX.txt").is_file():
+                binds.append(f"{skills_dir}:/challenge/skills:ro")
 
             config = {
                 "Image": self.image,

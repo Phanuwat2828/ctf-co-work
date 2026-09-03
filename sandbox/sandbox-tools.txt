@@ -1,12 +1,29 @@
 CTF SANDBOX TOOLS REFERENCE
 ============================
-All tools pre-installed in the sandbox. cat /tools.txt to view this file.
+All tools pre-installed in the sandbox (Kali Linux). cat /tools.txt to view this file.
 
 == NETWORKING ==
 nc (netcat)        TCP/UDP connections. nc host port <<'EOF' for heredoc sessions.
 curl               HTTP client. -s silent, -k skip TLS, -d data, -H header.
 wget               HTTP download. wget -O file url.
 nmap               Port scanner. nmap -sV host, nmap -p- host.
+masscan            High-speed port scanner. masscan -p1-65535 host.
+tcpdump            Packet capture. tcpdump -i any -w out.pcap.
+tshark            Wireshark CLI. tshark -r out.pcap.
+socat              Bidirectional relay. socat TCP-LISTEN:port,reuseaddr,fork TCP:host:port.
+bettercap          MITM / network attack framework.
+mitmproxy          Interactive HTTP/HTTPS proxy.
+
+== WEB ==
+ffuf              Fast web fuzzer. ffuf -u URL/FUZZ -w wordlist.
+feroxbuster       Content discovery. feroxbuster -u URL.
+gobuster          Directory/DNS busting. gobuster dir -u URL -w wordlist.
+dirsearch         Web path scanner.
+wfuzz             Web fuzzer. wfuzz -z file,wordlist -u URL/FUZZ.
+nikto             Web server scanner.
+sqlmap            Automated SQL injection.
+metasploit-framework  Exploit framework. msfconsole.
+hydra             Login brute-force. hydra -l user -P pass ssh://host.
 
 == BINARY ANALYSIS ==
 file               Identify file type. file binary
@@ -17,12 +34,17 @@ binwalk            Firmware/embedded extraction. binwalk -e file to extract.
 objdump            Disassembly. objdump -d binary (from binutils).
 readelf            ELF header info. readelf -a binary.
 nm                 Symbol listing. nm binary.
+checksec           Binary security properties. checksec --file=binary.
+patchelf           Modify ELF headers. patchelf --set-interpreter ...
 
 == DEBUGGERS / TRACING ==
 gdb                GNU debugger. gdb binary, then run, break, info, x/...
+gdb-multiarch      Multi-arch gdb. gdb-multiarch ./binary -q
 ltrace             Library call tracer. ltrace ./binary
 strace             System call tracer. strace ./binary
 radare2            Reverse engineering. r2 binary, then aaa; pdf @main; afl
+ghidra             Decompiler. analyzeHeadless + pyghidra.
+apktool            APK reverse engineering. apktool d app.apk.
 
 == STEGANOGRAPHY ==
 steghide           Embed/extract in JPEG/BMP/WAV. steghide extract -sf file.jpg
@@ -46,6 +68,7 @@ icat               Sleuthkit: extract file by inode. icat -o offset disk.img ino
 tsk_recover        Sleuthkit: recover deleted files. tsk_recover disk.img outdir/
 fsstat             Sleuthkit: filesystem stats. fsstat -o offset disk.img
 foremost           File carving by header/footer. foremost -i disk.img -o outdir/
+scalpel            File carving. scalpel disk.img -o outdir/
 testdisk           Partition recovery. testdisk disk.img
 xfs_db             XFS debugger. xfs_db -c "sb 0" -c "p" disk.img
 xfs_repair         XFS repair. xfs_repair -n disk.img (read-only check).
@@ -61,13 +84,21 @@ sage               SageMath CAS. sage -c 'from sage.all import *; print(factor(n
 cado-nfs           Number Field Sieve (large factoring/DLP). cado-nfs <N>
 flatter            Fast LLL lattice reduction. flatter < input_matrix
 
+== PASSWORDS / WORDLISTS ==
+john               John the Ripper. john hash.txt --wordlist=rockyou.txt
+hashcat            GPU hash cracking. hashcat -m 0 hash.txt rockyou.txt
+crunch             Wordlist generator. crunch 4 4 abcdef123456
+cewl               Scrape words from a site. cewl URL -w words.txt
+rockyou            /usr/share/wordlists/rockyou.txt (already gunzipped)
+seclists           /usr/share/seclists (large wordlist collection)
+
 == BUILD TOOLS ==
 gcc / g++          C/C++ compiler. gcc -o exploit exploit.c
 make / cmake       Build systems.
 jq                 JSON processor. cat file.json | jq '.key'
 
 == ARCHIVE ==
-zip / unzip        ZIP archives.
+zip / unzip        ZIP archives. p7zip, tar, gzip, bzip2, xz also present.
 git                Version control / clone repos.
 
 == CONTAINERS (Podman) ==
@@ -77,10 +108,11 @@ podman             Run challenge Docker images inside the sandbox.
 podman-compose     Docker Compose compatible. podman-compose up -d
 buildah            Build OCI container images. buildah bud -t myimage .
 
-== PYTHON 3 LIBRARIES ==
+== PYTHON 3 LIBRARIES (venv at /opt/ctf-venv) ==
 pwntools           CTF exploit framework. from pwn import *
                    p64/p32 packing, remote/process, ROP, shellcraft, asm.
 pycryptodome       Crypto primitives. from Crypto.Cipher import AES
+cryptography       Modern crypto. from cryptography.hazmat.primitives...
 sympy              Symbolic math. factorint(n), isprime(n), discrete_log, nthroot_mod.
 gmpy2              Fast multi-precision arithmetic. gmpy2.iroot, gmpy2.invert.
 z3-solver          SMT solver. from z3 import *; s=Solver(); s.add(...); s.check()
@@ -88,24 +120,30 @@ fpylll             LLL/BKZ lattice reduction. from fpylll import IntegerMatrix, 
 angr               Binary analysis framework. import angr; p=angr.Project('bin')
 capstone           Disassembly engine. from capstone import *
 unicorn            CPU emulator. from unicorn import *
-ropgadget          ROP gadget finder. ROPgadget --binary binary
+keystone           Assembler. from keystone import *
+ropper / ropgadget ROP gadget finders. ROPgadget --binary binary
 Pillow             Image processing. from PIL import Image
 pytesseract        Python OCR wrapper. pytesseract.image_to_string(img)
 scipy              Scientific computing. scipy.optimize, scipy.linalg.
 numpy              Numerical arrays. np.frombuffer, np.bitwise_xor.
 requests           HTTP client. requests.get(url), requests.post(url, data=...).
-flask              HTTP server. Quick listeners for callbacks.
+beautifulsoup4     HTML parsing. bs4.
+flask / fastapi    HTTP servers. Quick listeners for callbacks.
+uvicorn            ASGI server for fastapi.
+ipython            Interactive Python.
 volatility3        Memory forensics framework (Python API).
 torch              PyTorch (CPU). import torch — tensors, neural nets, ML inference.
 keras              Keras deep learning. import keras — model loading, inference.
 PyJWT              JWT encode/decode. import jwt; jwt.encode(payload, key, algorithm='HS256')
+pyghidra           Ghidra Python API. with pyghidra.open_program(...) as flat_api:
+one_gadget         Find one-gadget RCE in libc. one_gadget /lib/x86_64-linux-gnu/libc.so.6
 
 == NOTES ==
-- Sandbox runs ARM64. Do NOT execute x86/x86-64 binaries locally.
-  Use Ghidra tools for RE, and interact with remote services for dynamic analysis.
-- Need a package not listed? Run `pip install <pkg>` or `uv pip install <pkg>`.
+- Python lives in a venv at /opt/ctf-venv (already on PATH).
+- Need a package not listed? Run `pip install <pkg>`.
 - Distfiles are at /challenge/distfiles/ (read-only)
 - Write generated/repaired files to /challenge/workspace/ (writable)
 - Services on the host are reachable via host.docker.internal (bridge networking).
 - RsaCtfTool is at /opt/RsaCtfTool/
 - CADO-NFS is at /opt/cado-nfs/
+- /work and /loot are scratch/output directories.

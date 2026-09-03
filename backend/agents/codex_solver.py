@@ -27,7 +27,16 @@ from backend.models import model_id_from_spec, supports_vision
 from backend.output_types import solver_output_json_schema
 from backend.prompts import ChallengeMeta, build_prompt, list_distfiles
 from backend.sandbox import DockerSandbox
-from backend.solver_base import CANCELLED, ERROR, FLAG_FOUND, GAVE_UP, QUOTA_ERROR, SolverResult
+from backend.solver_base import (
+    CANCELLED,
+    ERROR,
+    FLAG_FOUND,
+    GAVE_UP,
+    QUOTA_ERROR,
+    SolverResult,
+    role_display_label,
+    role_system_section,
+)
 from backend.tools.core import (
     do_bash,
     do_list_files,
@@ -132,9 +141,12 @@ class CodexSolver:
         submit_fn=None,
         message_bus=None,
         notify_coordinator=None,
+        role: str = "",
     ) -> None:
         self.model_spec = model_spec
         self.model_id = model_id_from_spec(model_spec)
+        self.role = role
+        self._label = role_display_label(self.model_id, role)
         self.challenge_dir = challenge_dir
         self.meta = meta
         self.message_bus = message_bus
@@ -153,8 +165,8 @@ class CodexSolver:
         )
         self.use_vision = supports_vision(model_spec)
         self.loop_detector = LoopDetector()
-        self.tracer = SolverTracer(meta.name, self.model_id)
-        self.agent_name = f"{meta.name}/{self.model_id}"
+        self.tracer = SolverTracer(meta.name, self._label)
+        self.agent_name = f"{meta.name}/{self._label}"
 
         self._proc: asyncio.subprocess.Process | None = None
         self._thread_id: str | None = None
@@ -182,6 +194,8 @@ class CodexSolver:
             self.meta, distfile_names, container_arch=container_arch,
             has_named_tools=True,
         )
+        if self.role:
+            system_prompt += role_system_section(self.role)
 
         self._proc = await asyncio.create_subprocess_exec(
             "codex", "app-server",

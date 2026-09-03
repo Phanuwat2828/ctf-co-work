@@ -8,7 +8,7 @@ import boto3
 from pydantic_ai.models import Model
 from pydantic_ai.models.bedrock import BedrockConverseModel, BedrockModelSettings
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
-from pydantic_ai.models.openai import OpenAIModel, OpenAIModelSettings
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.bedrock import BedrockProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -69,7 +69,7 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                     provider=BedrockProvider(bedrock_client=client),
                 )
         case "azure":
-            return OpenAIModel(
+            return OpenAIChatModel(
                 model_id,
                 provider=OpenAIProvider(
                     base_url=settings.azure_openai_endpoint,
@@ -77,7 +77,7 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                 ),
             )
         case "zen":
-            return OpenAIModel(
+            return OpenAIChatModel(
                 model_id,
                 provider=OpenAIProvider(
                     base_url="https://opencode.ai/zen/v1",
@@ -89,6 +89,8 @@ def resolve_model(spec: str, settings: Settings) -> Model:
                 model_id,
                 provider=GoogleProvider(api_key=settings.gemini_api_key),
             )
+        case "custom":
+            return _resolve_custom_model(spec, model_id)
         case "claude-sdk" | "codex":
             raise ValueError(
                 f"Provider '{provider}' uses its own solver backend, not Pydantic AI. "
@@ -96,6 +98,42 @@ def resolve_model(spec: str, settings: Settings) -> Model:
             )
         case _:
             raise ValueError(f"Unknown provider: {provider}")
+
+
+def _resolve_custom_model(spec: str, model_id: str):
+    """Resolve a custom/<provider_name>/<model> spec from providers.json,
+    picking the model class according to the provider's API format."""
+    from backend.providers import find_provider
+
+    parts = spec.split("/")
+    name = parts[1] if len(parts) >= 3 else ""
+    provider_cfg = find_provider(name)
+    if not provider_cfg:
+        raise ValueError(f"Custom provider '{name}' not found in providers.json")
+    base_url = provider_cfg.base_url or "https://api.openai.com/v1"
+    fmt = provider_cfg.api_format or "openai_chat"
+    if fmt == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        return AnthropicModel(
+            model_id,
+            provider=AnthropicProvider(
+                api_key=provider_cfg.api_key or "not-set",
+                base_url=base_url if provider_cfg.base_url else None,
+            ),
+        )
+    if fmt == "openai_responses":
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+
+        return OpenAIResponsesModel(
+            model_id,
+            provider=OpenAIProvider(base_url=base_url, api_key=provider_cfg.api_key or "not-set"),
+        )
+    return OpenAIChatModel(
+        model_id,
+        provider=OpenAIProvider(base_url=base_url, api_key=provider_cfg.api_key or "not-set"),
+    )
 
 
 def resolve_model_settings(spec: str) -> ModelSettings:
@@ -109,11 +147,11 @@ def resolve_model_settings(spec: str) -> ModelSettings:
                 bedrock_cache_tool_definitions=True,
                 bedrock_cache_messages=True,
             )
-        case "azure" | "zen":
-            # Azure/Zen use OpenAI chat completions — server-side prompt caching
-            # is automatic, no explicit config needed. Set max_tokens to avoid
+        case "azure" | "zen" | "custom":
+            # Azure/Zen/custom endpoints use OpenAI chat completions —
+            # server-side prompt caching is automatic. Set max_tokens to avoid
             # reserving the full context window.
-            return OpenAIModelSettings(
+            return OpenAIChatModelSettings(
                 max_tokens=128_000,
             )
         case "google":
@@ -131,6 +169,8 @@ def resolve_model_settings(spec: str) -> ModelSettings:
 def model_id_from_spec(spec: str) -> str:
     """Extract just the model ID from a spec (strips effort suffix)."""
     parts = spec.split("/")
+    if len(parts) >= 3 and parts[0] == "custom":
+        return parts[2]
     return parts[1] if len(parts) >= 2 else spec
 
 
