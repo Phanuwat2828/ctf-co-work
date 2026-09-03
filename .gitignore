@@ -27,8 +27,5 @@ workspace/
 codex-schema-*/
 .claude/scheduled_tasks.lock
 
-# Imported on-demand CTF skill library (runtime data, ~several MB)
-agent_skills/
-
 # ZCode editor internals
 .zcode/
